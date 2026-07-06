@@ -21,7 +21,7 @@ jobs:
       run: pyinstaller --onefile divisor_turmas.py
 
     - name: Disponibilizar para Download
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: DivisorTurmas_Windows
         path: dist/divisor_turmas.exe
