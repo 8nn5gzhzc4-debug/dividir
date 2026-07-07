@@ -1,12 +1,18 @@
 import math
 import pandas as pd
+import tkinter as tk
+from tkinter import filedialog
+import os
 
 def carregar_e_ordenar_alunos(caminho_excel):
     df = pd.read_excel(caminho_excel)
     
+    # Preenchimento de Nulos
     df['RTP'] = df['RTP'].fillna(0).astype(int)
     df['Mau_Comportamento'] = df['Mau_Comportamento'].fillna(0).astype(int)
     df['QE'] = df['QE'].fillna(0).astype(int)
+    df['QV'] = df['QV'].fillna(0).astype(int) # NOVA COLUNA: Quadro de Valor
+    
     df['Agrupar_Com_Pais'] = df['Agrupar_Com_Pais'].fillna("").astype(str)
     df['Separar_De_Pais'] = df['Separar_De_Pais'].fillna("").astype(str)
     df['Agrupar_Com_Professores'] = df['Agrupar_Com_Professores'].fillna("").astype(str)
@@ -17,7 +23,8 @@ def carregar_e_ordenar_alunos(caminho_excel):
         df['Artes'] = "Música"
     df['Artes'] = df['Artes'].fillna("Música").astype(str)
     
-    df = df.sort_values(by=['RTP', 'Mau_Comportamento', 'QE', 'Sexo'], ascending=[False, False, False, True]).reset_index(drop=True)
+    # Ordenação: RTP > Mau Comportamento > QE > QV > Sexo
+    df = df.sort_values(by=['RTP', 'Mau_Comportamento', 'QE', 'QV', 'Sexo'], ascending=[False, False, False, False, True]).reset_index(drop=True)
     return df
 
 def distribuir_turmas(df, max_por_turma=30):
@@ -159,11 +166,12 @@ def distribuir_turmas(df, max_por_turma=30):
                 score_mau = sum(1 for x in turmas[t] if x['Mau_Comportamento'] == 1) if any(g['Mau_Comportamento'] == 1 for g in grupo_total) else 0
                 score_qe = sum(1 for x in turmas[t] if x['QE'] == 1) if any(g['QE'] == 1 for g in grupo_total) else 0
                 
-                score_prof = sum(avaliar_sugestoes_professores(g, turmas[t]) for g in grupo_total)
                 origem_count = sum(1 for x in turmas[t] for g in grupo_total if x['Turma_Origem'] == g['Turma_Origem'])
+                score_prof = sum(avaliar_sugestoes_professores(g, turmas[t]) for g in grupo_total)
+                score_qv = sum(1 for x in turmas[t] if x['QV'] == 1) if any(g['QV'] == 1 for g in grupo_total) else 0 # Integração QV no Grupo
                 score_artes = sum(1 for x in turmas[t] if x['Artes'].lower() == grupo_total[0]['Artes'].lower())
                 
-                return (score_rtp, score_mau, score_qe, origem_count, score_prof, score_artes, len(turmas[t]))
+                return (score_rtp, score_mau, score_qe, origem_count, score_prof, score_qv, score_artes, len(turmas[t]))
 
             turma_destino = min(turmas_validas, key=avaliar_turma_grupo)
             for membro in grupo_total:
@@ -183,6 +191,7 @@ def distribuir_turmas(df, max_por_turma=30):
                 taxa(t, lingua_aluno, 'QE') if aluno['QE'] == 1 else 0,
                 sum(1 for x in turmas[t] if x['Turma_Origem'] == aluno['Turma_Origem']),
                 avaliar_sugestoes_professores(aluno, turmas[t]),
+                taxa(t, lingua_aluno, 'QV') if aluno['QV'] == 1 else 0, # Integração QV Singular
                 sum(1 for x in turmas[t] if x['Artes'].lower() == arte_aluno),
                 sum(1 for x in turmas[t] if x['Sexo'] == aluno['Sexo']),
                 len(turmas[t])
@@ -271,7 +280,7 @@ def distribuir_turmas(df, max_por_turma=30):
         if aluno['Nome'] in alunos_processados: continue
         alocar_individual(aluno)
 
-    print("\nA iniciar motor iterativo de trocas...")
+    print("\nA iniciar motor iterativo de trocas para respeitar limites e pedidos...")
     
     def obter_mapeamento_atual():
         return {alu['Nome'].lower(): t_nome for t_nome, lista in turmas.items() for alu in lista}
@@ -350,7 +359,7 @@ def distribuir_turmas(df, max_por_turma=30):
         if not troca_feita_nesta_iteracao:
             break
 
-    print("\nA nivelar as estatísticas finais...")
+    print("\nA nivelar as estatísticas finais (RTP, Mau Comportamento, QE e QV)...")
     def balancear_caracteristica(feature):
         for _ in range(20):
             contagens = {t: sum(1 for a in turmas[t] if a[feature] == 1) for t in nomes_turmas}
@@ -380,14 +389,18 @@ def distribuir_turmas(df, max_por_turma=30):
                     if troca_feita: break
             if not troca_feita: break
 
+    # Nivelamento alargado em cascata
     balancear_caracteristica('RTP')
     balancear_caracteristica('Mau_Comportamento')
+    balancear_caracteristica('QE')
+    balancear_caracteristica('QV')
 
     return turmas
 
 def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"):
     writer = pd.ExcelWriter(ficheiro_saida, engine='openpyxl')
     resumo_dados = []
+    
     aluno_turma = {}
     todos_alunos = []
     aluno_dit = {} 
@@ -405,6 +418,7 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
         
         if not df_turma.empty:
             df_salvar = df_turma.drop(columns=['Prioridade'], errors='ignore')
+            # ORDENAÇÃO ALFABÉTICA
             if 'Nome' in df_salvar.columns:
                 df_salvar = df_salvar.sort_values(by='Nome')
             df_salvar.to_excel(writer, sheet_name=nome_turma, index=False)
@@ -418,7 +432,8 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                 "Francês": len(df_turma[df_turma['Lingua'].str.lower() == 'francês']),
                 "RTP": df_turma['RTP'].sum(),
                 "Mau Comp.": df_turma['Mau_Comportamento'].sum(),
-                "QE": df_turma['QE'].sum()
+                "Q. Excelência": df_turma['QE'].sum(),
+                "Q. Valor": df_turma['QV'].sum()
             }
             
             for org in origens_unicas:
@@ -435,7 +450,7 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
         nome_aluno_lower = nome_aluno.lower()
         turma_atual = aluno_turma.get(nome_aluno_lower, "")
         
-        # Validar Agrupar (Pais)
+        # Validar Agrupar (Pais) - IMPERATIVO
         if str(aluno.get('Agrupar_Com_Pais', '')) not in ["", "nan", "None"]:
             parceiros = [n.strip() for n in str(aluno['Agrupar_Com_Pais']).split(',') if n.strip()]
             for p in parceiros:
@@ -444,22 +459,24 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                     turma_alvo = aluno_turma[p_lower]
                     alvo_completo = aluno_dit[p_lower]
                     status = "✅ Cumprido" if turma_atual == turma_alvo else "❌ Falhou Crítico"
+                    
                     motivo = "-"
                     if status.startswith("❌"):
                         vetos_aluno = [v.strip().lower() for v in str(aluno.get('Separar_De_Pais', '')).split(',') if v.strip()]
                         vetos_alvo = [v.strip().lower() for v in str(alvo_completo.get('Separar_De_Pais', '')).split(',') if v.strip()]
+                        
                         if p_lower in vetos_aluno or nome_aluno_lower in vetos_alvo:
-                            motivo = "Paradoxo: Pedido para juntar e separar os mesmos alunos em simultâneo."
+                            motivo = "Paradoxo: Os pais pediram para juntar e separar os mesmos alunos em simultâneo."
                         elif aluno['Lingua'].lower() != alvo_completo['Lingua'].lower():
-                            motivo = "Conflito de Língua (lotação máxima na turma mista)."
+                            motivo = "Conflito de Língua (A turma mista atingiu a lotação máxima para uma das línguas)."
                         else:
-                            motivo = "Limite de turma (30) excedido ou conflito direto com vetos de pais de outros alunos."
+                            motivo = "Limite de turma (30 vagas) excedido ou conflito direto com vetos de pais de outros alunos na turma."
 
                     validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Pais)", "Alvo": p, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
                 else:
-                    validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Pais)", "Alvo": p, "Turma Aluno": turma_atual, "Turma Alvo": "-", "Estado": "⚠️ Alvo Inválido", "Motivo Falha": "Aluno alvo não consta na base de dados."})
+                    validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Pais)", "Alvo": p, "Turma Aluno": turma_atual, "Turma Alvo": "-", "Estado": "⚠️ Alvo Inválido", "Motivo Falha": "O aluno pedido não consta na lista de inscritos (Excel)."})
         
-        # Validar Separar (Pais)
+        # Validar Separar (Pais) - IMPERATIVO
         if str(aluno.get('Separar_De_Pais', '')) not in ["", "nan", "None"]:
             vetos = [n.strip() for n in str(aluno['Separar_De_Pais']).split(',') if n.strip()]
             for v in vetos:
@@ -467,10 +484,11 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                 if v_lower in aluno_turma:
                     turma_alvo = aluno_turma[v_lower]
                     status = "✅ Cumprido" if turma_atual != turma_alvo else "❌ Falhou Crítico"
-                    motivo = "-" if status.startswith("✅") else "Erro crítico de processamento."
+                    motivo = "-"
+                    if status.startswith("❌"): motivo = "Erro crítico de processamento. O limite imperativo foi quebrado."
                     validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Separar (Pais)", "Alvo": v, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
 
-        # Validar Agrupar (Profs)
+        # Validar Agrupar (Profs) - SUGESTÃO
         if str(aluno.get('Agrupar_Com_Professores', '')) not in ["", "nan", "None"]:
             pedidos_prof = [n.strip() for n in str(aluno['Agrupar_Com_Professores']).split(',') if n.strip()]
             for p in pedidos_prof:
@@ -478,10 +496,10 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                 if p_lower in aluno_turma:
                     turma_alvo = aluno_turma[p_lower]
                     status = "✅ Cumprido" if turma_atual == turma_alvo else "⚠️ Ignorado (Sugestão)"
-                    motivo = "-" if status.startswith("✅") else "Sugestão preterida para manter equilíbrio rigoroso ou respeitar regras imperativas."
+                    motivo = "-" if status.startswith("✅") else "A sugestão foi preterida para manter o equilíbrio (RTP, Mau Comportamento, Turmas de Origem, QE ou QV)."
                     validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Prof)", "Alvo": p, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
 
-        # Validar Separar (Profs)
+        # Validar Separar (Profs) - SUGESTÃO
         if str(aluno.get('Separar_De_Professores', '')) not in ["", "nan", "None"]:
             vetos_prof = [n.strip() for n in str(aluno['Separar_De_Professores']).split(',') if n.strip()]
             for v in vetos_prof:
@@ -489,32 +507,18 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                 if v_lower in aluno_turma:
                     turma_alvo = aluno_turma[v_lower]
                     status = "✅ Cumprido" if turma_atual != turma_alvo else "⚠️ Ignorado (Sugestão)"
-                    motivo = "-" if status.startswith("✅") else "Sugestão preterida para manter equilíbrio rigoroso ou respeitar regras imperativas."
+                    motivo = "-" if status.startswith("✅") else "A sugestão foi preterida para manter o equilíbrio rigoroso da escola."
                     validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Separar (Prof)", "Alvo": v, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
 
     if validacoes:
         pd.DataFrame(validacoes).to_excel(writer, sheet_name="Validação de Pedidos", index=False)
     else:
-        pd.DataFrame([{"Aviso": "Nenhum pedido de agrupamento ou separação registado."}]).to_excel(writer, sheet_name="Validação de Pedidos", index=False)
+        pd.DataFrame([{"Aviso": "Nenhum pedido registado."}]).to_excel(writer, sheet_name="Validação de Pedidos", index=False)
 
     writer.close()
     print(f"\nResultados guardados com sucesso no ficheiro '{ficheiro_saida}'.")
 
 if __name__ == "__main__":
-    ficheiro_input = "alunos.xlsx" 
-    try:
-        dados_alunos = carregar_e_ordenar_alunos(ficheiro_input)
-        resultado_turmas = distribuir_turmas(dados_alunos, max_por_turma=30)
-        exportar_resultados(resultado_turmas, dados_alunos)
-    except FileNotFoundError:
-        print(f"Erro: O ficheiro '{ficheiro_input}' não foi encontrado.")
-
-if __name__ == "__main__":
-    import tkinter as tk
-    from tkinter import filedialog
-    import os
-
-    # Iniciar e ocultar a janela principal do Tkinter
     root = tk.Tk()
     root.withdraw()
 
@@ -530,7 +534,6 @@ if __name__ == "__main__":
             dados_alunos = carregar_e_ordenar_alunos(ficheiro_input)
             resultado_turmas = distribuir_turmas(dados_alunos, max_por_turma=30)
             
-            # O ficheiro final será gerado automaticamente na mesma pasta do ficheiro original
             pasta_origem = os.path.dirname(ficheiro_input)
             ficheiro_saida = os.path.join(pasta_origem, "turmas_finais.xlsx")
             
