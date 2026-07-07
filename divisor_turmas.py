@@ -3,6 +3,7 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog
 import os
+import json
 
 def carregar_e_ordenar_alunos(caminho_excel):
     df = pd.read_excel(caminho_excel)
@@ -21,7 +22,6 @@ def carregar_e_ordenar_alunos(caminho_excel):
     if 'Artes' not in df.columns:
         df['Artes'] = "Música"
     df['Artes'] = df['Artes'].fillna("Música").astype(str)
-    df['Sexo'] = df['Sexo'].fillna("").astype(str)
     
     df = df.sort_values(by=['RTP', 'Mau_Comportamento', 'QE', 'QV', 'Sexo'], ascending=[False, False, False, False, True]).reset_index(drop=True)
     return df
@@ -160,10 +160,7 @@ def distribuir_turmas(df, max_por_turma=30):
                 score_prof = sum(avaliar_sugestoes_professores(g, turmas[t]) for g in grupo_total)
                 score_qv = sum(1 for x in turmas[t] if x['QV'] == 1) if any(g['QV'] == 1 for g in grupo_total) else 0 
                 score_artes = sum(1 for x in turmas[t] if x['Artes'].lower() == grupo_total[0]['Artes'].lower())
-                
-                # Atração de Género para Grupos
                 score_sexo = sum(1 for x in turmas[t] for g in grupo_total if x['Sexo'].upper() == g['Sexo'].upper())
-                
                 return (score_rtp, score_mau, score_qe, origem_count, score_prof, score_qv, score_sexo, score_artes, len(turmas[t]))
 
             turma_destino = min(turmas_validas, key=avaliar_turma_grupo)
@@ -311,7 +308,6 @@ def distribuir_turmas(df, max_por_turma=30):
             if aluno['Agrupar_Com_Pais'] == "" or nome_aluno_l not in aluno_turma: continue
                 
             parceiros = [n.strip() for n in aluno['Agrupar_Com_Pais'].split(',') if n.strip()]
-            
             if any(p.lower() in aluno_turma and aluno_turma[p.lower()] == aluno_turma[nome_aluno_l] for p in parceiros):
                 continue
             
@@ -384,16 +380,13 @@ def distribuir_turmas(df, max_por_turma=30):
             contagens = {t: sum(1 for a in turmas[t] if a[feature] == 1) for t in nomes_turmas}
             max_t = max(contagens, key=contagens.get)
             min_t = min(contagens, key=contagens.get)
-
             if contagens[max_t] - contagens[min_t] <= 1: break 
-
             troca_feita = False
             for mau_aluno in turmas[max_t]:
                 if mau_aluno[feature] == 1:
                     sat_max_antes = alunos_satisfeitos(turmas[max_t])
                     for bom_aluno in turmas[min_t]:
                         if bom_aluno[feature] == 0 and bom_aluno['Lingua'].lower() == mau_aluno['Lingua'].lower():
-                            
                             sat_min_antes = alunos_satisfeitos(turmas[min_t])
                             temp_max = [x for x in turmas[max_t] if x['Nome'] != mau_aluno['Nome']] + [bom_aluno]
                             temp_min = [x for x in turmas[min_t] if x['Nome'] != bom_aluno['Nome']] + [mau_aluno]
@@ -416,17 +409,13 @@ def distribuir_turmas(df, max_por_turma=30):
             contagens_M = {t: sum(1 for a in turmas[t] if a['Sexo'].upper() == 'M') for t in nomes_turmas}
             max_t = max(contagens_M, key=contagens_M.get)
             min_t = min(contagens_M, key=contagens_M.get)
-
             if contagens_M[max_t] - contagens_M[min_t] <= 1: break 
-
             troca_feita = False
             for rapaz in turmas[max_t]:
                 if rapaz['Sexo'].upper() == 'M':
                     sat_max_antes = alunos_satisfeitos(turmas[max_t])
                     for rapariga in turmas[min_t]:
                         if rapariga['Sexo'].upper() == 'F' and rapariga['Lingua'].lower() == rapaz['Lingua'].lower():
-                            
-                            # PROTEÇÃO CEGA: A troca de sexo só ocorre se não desestabilizar RTP e Mau Comportamento
                             if rapaz['RTP'] == rapariga['RTP'] and rapaz['Mau_Comportamento'] == rapariga['Mau_Comportamento']:
                                 sat_min_antes = alunos_satisfeitos(turmas[min_t])
                                 temp_max = [x for x in turmas[max_t] if x['Nome'] != rapaz['Nome']] + [rapariga]
@@ -445,14 +434,40 @@ def distribuir_turmas(df, max_por_turma=30):
                     if troca_feita: break
             if not troca_feita: break
 
-    # Nivelamento final em sequência de importância
     balancear_caracteristica('RTP')
     balancear_caracteristica('Mau_Comportamento')
     balancear_caracteristica('QE')
     balancear_caracteristica('QV')
-    balancear_genero() # A grande martelada segura final
+    balancear_genero()
 
     return turmas
+
+def diagnosticar_falha(turmas, aluno_obj, alvo_obj, t_atual, t_alvo):
+    v_aluno = [v.strip().lower() for v in str(aluno_obj.get('Separar_De_Pais', '')).split(',') if v.strip()]
+    v_alvo = [v.strip().lower() for v in str(alvo_obj.get('Separar_De_Pais', '')).split(',') if v.strip()]
+    n_aluno_l = aluno_obj['Nome'].lower()
+    n_alvo_l = alvo_obj['Nome'].lower()
+    
+    if n_alvo_l in v_aluno or n_aluno_l in v_alvo:
+        return f"Paradoxo: Pedido conflitante dos pais para juntar e separar '{alvo_obj['Nome']}' em simultâneo."
+    if aluno_obj['Lingua'].lower() != alvo_obj['Lingua'].lower():
+        return f"Conflito de Idioma: '{alvo_obj['Nome']}' estuda {alvo_obj['Lingua']} e a quota na turma mista já estava preenchida."
+        
+    for a_turma in turmas.get(t_alvo, []):
+        if a_turma['Nome'].lower() in v_aluno:
+            return f"Veto Direto: Pediu para se afastar de '{a_turma['Nome']}', que já está na turma alvo ({t_alvo})."
+        v_terceiro = [v.strip().lower() for v in str(a_turma.get('Separar_De_Pais', '')).split(',') if v.strip()]
+        if n_aluno_l in v_terceiro:
+            return f"Veto Recebido: O aluno '{a_turma['Nome']}' (na {t_alvo}) tem um pedido imperativo para se afastar deste aluno."
+            
+    for a_turma in turmas.get(t_atual, []):
+        if a_turma['Nome'].lower() in v_alvo:
+            return f"Veto Inverso: O alvo '{alvo_obj['Nome']}' pediu para se afastar de '{a_turma['Nome']}', que está na turma atual ({t_atual})."
+        v_terceiro = [v.strip().lower() for v in str(a_turma.get('Separar_De_Pais', '')).split(',') if v.strip()]
+        if n_alvo_l in v_terceiro:
+            return f"Veto Interno: '{alvo_obj['Nome']}' não pôde vir para a {t_atual} porque '{a_turma['Nome']}' bloqueou a sua entrada."
+            
+    return f"Limite de Lotação ou quebra de grupo imperativo de terceiros para concretizar a troca."
 
 def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"):
     writer = pd.ExcelWriter(ficheiro_saida, engine='openpyxl')
@@ -500,33 +515,6 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
     df_resumo = pd.DataFrame(resumo_dados)
     df_resumo.to_excel(writer, sheet_name="Resumo Estatístico", index=False)
 
-    def diagnosticar_falha(aluno_obj, alvo_obj, t_atual, t_alvo):
-        v_aluno = [v.strip().lower() for v in str(aluno_obj.get('Separar_De_Pais', '')).split(',') if v.strip()]
-        v_alvo = [v.strip().lower() for v in str(alvo_obj.get('Separar_De_Pais', '')).split(',') if v.strip()]
-        n_aluno_l = aluno_obj['Nome'].lower()
-        n_alvo_l = alvo_obj['Nome'].lower()
-        
-        if n_alvo_l in v_aluno or n_aluno_l in v_alvo:
-            return f"Paradoxo: Pedido conflitante dos pais para juntar e separar '{alvo_obj['Nome']}' em simultâneo."
-        if aluno_obj['Lingua'].lower() != alvo_obj['Lingua'].lower():
-            return f"Conflito de Idioma: '{alvo_obj['Nome']}' estuda {alvo_obj['Lingua']} e a quota na turma mista já estava preenchida."
-            
-        for a_turma in turmas.get(t_alvo, []):
-            if a_turma['Nome'].lower() in v_aluno:
-                return f"Veto Direto: Pediu para se afastar de '{a_turma['Nome']}', que já está na turma alvo ({t_alvo})."
-            v_terceiro = [v.strip().lower() for v in str(a_turma.get('Separar_De_Pais', '')).split(',') if v.strip()]
-            if n_aluno_l in v_terceiro:
-                return f"Veto Recebido: O aluno '{a_turma['Nome']}' (na {t_alvo}) tem um pedido imperativo para se afastar deste aluno."
-                
-        for a_turma in turmas.get(t_atual, []):
-            if a_turma['Nome'].lower() in v_alvo:
-                return f"Veto Inverso: O alvo '{alvo_obj['Nome']}' pediu para se afastar de '{a_turma['Nome']}', que está na turma atual ({t_atual})."
-            v_terceiro = [v.strip().lower() for v in str(a_turma.get('Separar_De_Pais', '')).split(',') if v.strip()]
-            if n_alvo_l in v_terceiro:
-                return f"Veto Interno: '{alvo_obj['Nome']}' não pôde vir para a {t_atual} porque '{a_turma['Nome']}' bloqueou a sua entrada."
-                
-        return f"Limite de Lotação ou quebra de grupo imperativo de terceiros para concretizar a troca."
-
     validacoes = []
     for aluno in todos_alunos:
         nome_aluno = aluno['Nome']
@@ -549,7 +537,7 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                     if p.lower() in aluno_dit:
                         alvo_completo = aluno_dit[p.lower()]
                         turma_alvo = aluno_turma.get(p.lower(), "")
-                        razao = diagnosticar_falha(aluno, alvo_completo, turma_atual, turma_alvo)
+                        razao = diagnosticar_falha(turmas, aluno, alvo_completo, turma_atual, turma_alvo)
                         motivos_especificos.append(f"-> Com '{alvo_completo['Nome']}': {razao}")
                     else:
                         motivos_especificos.append(f"-> Com '{p}': Aluno não existe na base de dados.")
@@ -595,6 +583,110 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
     writer.close()
     print(f"\nResultados guardados com sucesso no ficheiro '{ficheiro_saida}'.")
 
+def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html"):
+    nodes = []
+    edges = []
+    aluno_turma = {}
+    
+    lista_alunos = df_original.to_dict('records')
+    
+    cores_turmas = {
+        "7.º A": "#3498db", "7.º B": "#9b59b6", "7.º C": "#f1c40f", "7.º D": "#e67e22",
+        "7.º E": "#1abc9c", "7.º F": "#34495e", "7.º G": "#ecf0f1", "7.º H": "#95a5a6"
+    }
+
+    for turma_nome, alunos in turmas.items():
+        for aluno in alunos:
+            aluno_turma[aluno['Nome'].lower()] = turma_nome
+            cor = cores_turmas.get(turma_nome, "#bdc3c7")
+            
+            detalhes = f"Turma: {turma_nome}\\nOrigem: {aluno.get('Turma_Origem', '')}\\nRTP: {aluno.get('RTP', 0)}"
+            nodes.append({
+                "id": aluno['Nome'].lower(),
+                "label": aluno['Nome'],
+                "group": turma_nome,
+                "color": cor,
+                "title": detalhes
+            })
+
+    for aluno in lista_alunos:
+        nome_l = aluno['Nome'].lower()
+        if nome_l not in aluno_turma: continue
+
+        # Agrupar Pais (Verde, Seta Sólida)
+        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
+        for p in pedidos:
+            if p in aluno_turma:
+                edges.append({
+                    "from": nome_l, 
+                    "to": p, 
+                    "color": {"color": "#2ecc71"}, 
+                    "arrows": "to", 
+                    "title": "Agrupar (Pais)"
+                })
+
+        # Separar Pais (Vermelho, Tracejado)
+        vetos = [n.strip().lower() for n in str(aluno.get('Separar_De_Pais', '')).split(',') if n.strip()]
+        for v in vetos:
+            if v in aluno_turma:
+                edges.append({
+                    "from": nome_l, 
+                    "to": v, 
+                    "color": {"color": "#e74c3c"}, 
+                    "dashes": True, 
+                    "arrows": "to", 
+                    "title": "Separar (Pais)"
+                })
+
+    html_content = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Mapa de Ligações - Turmas</title>
+        <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+        <style type="text/css">
+            body {{ font-family: sans-serif; margin: 0; padding: 0; }}
+            #mynetwork {{ width: 100vw; height: 100vh; background-color: #fafafa; }}
+            #legend {{ position: absolute; top: 10px; left: 10px; background: white; padding: 10px; border: 1px solid #ccc; border-radius: 5px; z-index: 999; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);}}
+        </style>
+    </head>
+    <body>
+        <div id="legend">
+            <strong>Legenda:</strong><br>
+            <span style="color: #2ecc71;">&#8594; Linha Verde:</span> Pedido de Agrupamento<br>
+            <span style="color: #e74c3c;">&#8604; Linha Vermelha (Tracejada):</span> Pedido de Separação<br>
+            <em>Podes arrastar os alunos e fazer scroll para aplicar zoom. Clica num aluno para ver detalhes.</em>
+        </div>
+        <div id="mynetwork"></div>
+        <script type="text/javascript">
+            var nodes = new vis.DataSet({json.dumps(nodes)});
+            var edges = new vis.DataSet({json.dumps(edges)});
+            var container = document.getElementById('mynetwork');
+            var data = {{ nodes: nodes, edges: edges }};
+            var options = {{
+                physics: {{
+                    stabilization: false,
+                    barnesHut: {{ gravitationalConstant: -3000, springConstant: 0.04, springLength: 150 }}
+                }},
+                nodes: {{
+                    shape: 'dot',
+                    size: 15,
+                    font: {{ size: 12, face: 'Tahoma' }},
+                    borderWidth: 2
+                }},
+                edges: {{
+                    smooth: {{ type: 'continuous' }}
+                }}
+            }};
+            var network = new vis.Network(container, data, options);
+        </script>
+    </body>
+    </html>
+    """
+    with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"Mapa visual gerado com sucesso no ficheiro '{ficheiro_saida_html}'.")
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.withdraw()
@@ -612,9 +704,12 @@ if __name__ == "__main__":
             resultado_turmas = distribuir_turmas(dados_alunos, max_por_turma=30)
             
             pasta_origem = os.path.dirname(ficheiro_input)
-            ficheiro_saida = os.path.join(pasta_origem, "turmas_finais.xlsx")
+            ficheiro_saida_excel = os.path.join(pasta_origem, "turmas_finais.xlsx")
+            ficheiro_saida_html = os.path.join(pasta_origem, "mapa_turmas.html")
             
-            exportar_resultados(resultado_turmas, dados_alunos, ficheiro_saida)
+            exportar_resultados(resultado_turmas, dados_alunos, ficheiro_saida_excel)
+            gerar_mapa_visual(resultado_turmas, dados_alunos, ficheiro_saida_html)
+            
             input("\nProcesso concluído com sucesso! Pressiona ENTER para sair...")
         except Exception as e:
             print(f"\nOcorreu um erro técnico: {e}")
