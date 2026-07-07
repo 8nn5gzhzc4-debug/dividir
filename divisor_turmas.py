@@ -25,7 +25,7 @@ def carregar_e_ordenar_alunos(caminho_excel):
     df = df.sort_values(by=['RTP', 'Mau_Comportamento', 'QE', 'QV', 'Sexo'], ascending=[False, False, False, False, True]).reset_index(drop=True)
     return df
 
-def distribuir_turmas(df, max_por_turma=30):
+def distribuir_turmas(df, max_por_turma=31):
     nomes_turmas = ["7.º A", "7.º B", "7.º C", "7.º D", "7.º E", "7.º F", "7.º G", "7.º H"]
     num_total_turmas = len(nomes_turmas)
     turmas = {nome: [] for nome in nomes_turmas}
