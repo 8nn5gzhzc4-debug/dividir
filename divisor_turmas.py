@@ -570,8 +570,9 @@ if __name__ == "__main__":
             print(f"\nOcorreu um erro técnico: {e}")
             input("Pressiona ENTER para sair...")
     else:
-        print("Operação cancelada. Nenhum ficheiro selecionado.")    turma_mista = None
-    num_turmas_espanhol = 0
+        print("Operação cancelada. Nenhum ficheiro selecionado.")
+        num_turmas_espanhol = 0
+        turma_mista = None
     
     for k in range(1, num_total_turmas):
         if k == 0: continue
