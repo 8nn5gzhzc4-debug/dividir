@@ -193,6 +193,542 @@ def distribuir_turmas(df, max_por_turma=30):
         turmas[turma_destino].append(aluno)
         alunos_processados.add(aluno['Nome'])
 
+    componentes = {a['Nome'].lower(): [a] for a in lista_alunos}
+    parent = {a['Nome'].lower(): a['Nome'].lower() for a in lista_alunos}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def merge(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            novo_grupo = componentes[ra] + componentes[rb]
+            if len(novo_grupo) > max_por_turma: return False
+            nomes_novo = {m['Nome'].lower() for m in novo_grupo}
+            for m in novo_grupo:
+                vetos = {v.strip().lower() for v in m['Separar_De_Pais'].split(',') if v.strip()}
+                if vetos & nomes_novo: return False
+            
+            parent[rb] = ra
+            componentes[ra] = novo_grupo
+            del componentes[rb]
+            return True
+        return False
+
+    for aluno in lista_alunos:
+        nome_a = aluno['Nome'].lower()
+        pedidos_a = [n.strip().lower() for n in aluno['Agrupar_Com_Pais'].split(',') if n.strip()]
+        for p in pedidos_a:
+            aluno_p = next((x for x in lista_alunos if x['Nome'].lower() == p), None)
+            if aluno_p:
+                pedidos_p = [n.strip().lower() for n in aluno_p['Agrupar_Com_Pais'].split(',') if n.strip()]
+                if nome_a in pedidos_p:
+                    merge(nome_a, p)
+
+    for aluno in lista_alunos:
+        nome_a = aluno['Nome'].lower()
+        pedidos_a = [n.strip().lower() for n in aluno['Agrupar_Com_Pais'].split(',') if n.strip()]
+        if not pedidos_a: continue
+        ra = find(nome_a)
+        nomes_no_grupo = {m['Nome'].lower() for m in componentes[ra]}
+        if any(p in nomes_no_grupo for p in pedidos_a): continue
+        for p in pedidos_a:
+            if p in parent and merge(nome_a, p): break
+
+    grupos_de_pedidos_limpos = [g for g in componentes.values() if len(g) > 1]
+    grupos_rtp_alta, grupos_rtp_baixa = [], []
+    grupos_normais_alta, grupos_normais_baixa = [], []
+
+    for grupo_total in grupos_de_pedidos_limpos:
+        linguas_grupo = set(x['Lingua'].lower() for x in grupo_total)
+        tem_rtp = any(x['RTP'] == 1 for x in grupo_total)
+        misto = ('espanhol' in linguas_grupo and 'francês' in linguas_grupo)
+
+        if tem_rtp:
+            if misto: grupos_rtp_baixa.append(grupo_total)
+            else: grupos_rtp_alta.append(grupo_total)
+        else:
+            if misto: grupos_normais_baixa.append(grupo_total)
+            else: grupos_normais_alta.append(grupo_total)
+
+    for lista_g in (grupos_rtp_alta, grupos_rtp_baixa, grupos_normais_alta, grupos_normais_baixa):
+        lista_g.sort(key=len, reverse=True)
+
+    for g in grupos_rtp_alta: alocar_grupo(g, misto=False)
+    for g in grupos_rtp_baixa: alocar_grupo(g, misto=True)
+
+    for aluno in lista_alunos:
+        if aluno['Nome'] in alunos_processados: continue
+        if aluno['RTP'] == 1: alocar_individual(aluno)
+
+    for g in grupos_normais_alta: alocar_grupo(g, misto=False)
+    for g in grupos_normais_baixa: alocar_grupo(g, misto=True)
+
+    for aluno in lista_alunos:
+        if aluno['Nome'] in alunos_processados: continue
+        alocar_individual(aluno)
+
+    print("\nA iniciar motor de otimização de matriz (Manutenção do critério 'Pelo menos 1')...")
+    
+    def obter_mapeamento_atual():
+        return {alu['Nome'].lower(): t_nome for t_nome, lista in turmas.items() for alu in lista}
+
+    def alunos_satisfeitos(lista_turma):
+        nomes_turma = {x['Nome'].lower() for x in lista_turma}
+        satisfeitos = set()
+        for x in lista_turma:
+            pedidos = [p.strip().lower() for p in x['Agrupar_Com_Pais'].split(',') if p.strip()]
+            if any(p in nomes_turma for p in pedidos):
+                satisfeitos.add(x['Nome'].lower())
+        return satisfeitos
+
+    for iteracao in range(15):
+        aluno_turma = obter_mapeamento_atual()
+        troca_feita_nesta_iteracao = False
+        
+        for aluno in lista_alunos:
+            nome_aluno_l = aluno['Nome'].lower()
+            if aluno['Agrupar_Com_Pais'] == "" or nome_aluno_l not in aluno_turma: continue
+                
+            parceiros = [n.strip() for n in aluno['Agrupar_Com_Pais'].split(',') if n.strip()]
+            if any(p.lower() in aluno_turma and aluno_turma[p.lower()] == aluno_turma[nome_aluno_l] for p in parceiros): continue
+            
+            for par_nome in parceiros:
+                par_l = par_nome.lower()
+                if par_l not in aluno_turma: continue
+                
+                turma_atual = aluno_turma[nome_aluno_l]
+                turma_alvo = aluno_turma[par_l]
+                if turma_atual == turma_alvo: continue
+                
+                lingua_aluno = aluno['Lingua'].lower()
+                candidato_troca = None
+                
+                sat_atual_antes = alunos_satisfeitos(turmas[turma_atual])
+                sat_alvo_antes = alunos_satisfeitos(turmas[turma_alvo])
+                
+                for potencial in turmas[turma_alvo]:
+                    if (potencial['RTP'] == 0 and 
+                        potencial['Mau_Comportamento'] == 0 and 
+                        potencial['Lingua'].lower() == lingua_aluno):
+                        
+                        temp_atual = [x for x in turmas[turma_atual] if x['Nome'] != aluno['Nome']] + [potencial]
+                        temp_alvo = [x for x in turmas[turma_alvo] if x['Nome'] != potencial['Nome']] + [aluno]
+                        
+                        sat_atual_depois = alunos_satisfeitos(temp_atual)
+                        sat_alvo_depois = alunos_satisfeitos(temp_alvo)
+                        
+                        if not sat_atual_antes.issubset(sat_atual_depois): continue
+                        if not sat_alvo_antes.issubset(sat_alvo_depois): continue
+                        
+                        if (pode_ficar_na_turma_imperativo(aluno, temp_alvo) and pode_ficar_na_turma_imperativo(potencial, temp_atual) and
+                            avaliar_sugestoes_professores(aluno, temp_alvo) <= 0 and avaliar_sugestoes_professores(potencial, temp_atual) <= 0):
+                            candidato_troca = potencial
+                            break
+                
+                if not candidato_troca:
+                    for potencial in turmas[turma_alvo]:
+                        if (potencial['RTP'] <= aluno['RTP'] and 
+                            potencial['Mau_Comportamento'] <= aluno['Mau_Comportamento'] and
+                            potencial['Lingua'].lower() == lingua_aluno):
+                            
+                            temp_atual = [x for x in turmas[turma_atual] if x['Nome'] != aluno['Nome']] + [potencial]
+                            temp_alvo = [x for x in turmas[turma_alvo] if x['Nome'] != potencial['Nome']] + [aluno]
+                            
+                            sat_atual_depois = alunos_satisfeitos(temp_atual)
+                            sat_alvo_depois = alunos_satisfeitos(temp_alvo)
+                            
+                            if not sat_atual_antes.issubset(sat_atual_depois): continue
+                            if not sat_alvo_antes.issubset(sat_alvo_depois): continue
+                                
+                            if pode_ficar_na_turma_imperativo(aluno, temp_alvo) and pode_ficar_na_turma_imperativo(potencial, temp_atual):
+                                candidato_troca = potencial
+                                break
+
+                if candidato_troca:
+                    turmas[turma_atual].remove(aluno)
+                    turmas[turma_alvo].remove(candidato_troca)
+                    turmas[turma_alvo].append(aluno)
+                    turmas[turma_atual].append(candidato_troca)
+                    troca_feita_nesta_iteracao = True
+                    aluno_turma = obter_mapeamento_atual()
+                    break 
+                
+        if not troca_feita_nesta_iteracao:
+            break
+
+    print("\nA nivelar as estatísticas finais (RTP, Mau Comp, QE e QV)...")
+    def balancear_caracteristica(feature):
+        for _ in range(20):
+            contagens = {t: sum(1 for a in turmas[t] if a[feature] == 1) for t in nomes_turmas}
+            max_t = max(contagens, key=contagens.get)
+            min_t = min(contagens, key=contagens.get)
+
+            if contagens[max_t] - contagens[min_t] <= 1: break 
+
+            troca_feita = False
+            for mau_aluno in turmas[max_t]:
+                if mau_aluno[feature] == 1:
+                    sat_max_antes = alunos_satisfeitos(turmas[max_t])
+                    for bom_aluno in turmas[min_t]:
+                        if bom_aluno[feature] == 0 and bom_aluno['Lingua'].lower() == mau_aluno['Lingua'].lower():
+                            
+                            sat_min_antes = alunos_satisfeitos(turmas[min_t])
+                            temp_max = [x for x in turmas[max_t] if x['Nome'] != mau_aluno['Nome']] + [bom_aluno]
+                            temp_min = [x for x in turmas[min_t] if x['Nome'] != bom_aluno['Nome']] + [mau_aluno]
+                            
+                            if not sat_max_antes.issubset(alunos_satisfeitos(temp_max)): continue
+                            if not sat_min_antes.issubset(alunos_satisfeitos(temp_min)): continue
+
+                            if pode_ficar_na_turma_imperativo(mau_aluno, temp_min) and pode_ficar_na_turma_imperativo(bom_aluno, temp_max):
+                                turmas[max_t].remove(mau_aluno)
+                                turmas[min_t].remove(bom_aluno)
+                                turmas[min_t].append(mau_aluno)
+                                turmas[max_t].append(bom_aluno)
+                                troca_feita = True
+                                break
+                    if troca_feita: break
+            if not troca_feita: break
+
+    balancear_caracteristica('RTP')
+    balancear_caracteristica('Mau_Comportamento')
+    balancear_caracteristica('QE')
+    balancear_caracteristica('QV')
+
+    return turmas
+
+def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"):
+    writer = pd.ExcelWriter(ficheiro_saida, engine='openpyxl')
+    resumo_dados = []
+    
+    aluno_turma = {}
+    todos_alunos = []
+    aluno_dit = {} 
+    
+    origens_unicas = sorted(df_original['Turma_Origem'].unique())
+    
+    for nome_turma in sorted(turmas.keys()):
+        alunos = turmas[nome_turma]
+        df_turma = pd.DataFrame(alunos)
+        
+        for aluno in alunos:
+            aluno_turma[aluno['Nome'].lower()] = nome_turma
+            todos_alunos.append(aluno)
+            aluno_dit[aluno['Nome'].lower()] = aluno
+        
+        if not df_turma.empty:
+            df_salvar = df_turma.drop(columns=['Prioridade'], errors='ignore')
+            if 'Nome' in df_salvar.columns:
+                df_salvar = df_salvar.sort_values(by='Nome')
+            df_salvar.to_excel(writer, sheet_name=nome_turma, index=False)
+            
+            estatisticas_turma = {
+                "Turma": nome_turma,
+                "Total Alunos": len(df_turma),
+                "Rapazes (M)": len(df_turma[df_turma['Sexo'].str.upper() == 'M']),
+                "Raparigas (F)": len(df_turma[df_turma['Sexo'].str.upper() == 'F']),
+                "Espanhol": len(df_turma[df_turma['Lingua'].str.lower() == 'espanhol']),
+                "Francês": len(df_turma[df_turma['Lingua'].str.lower() == 'francês']),
+                "RTP": df_turma['RTP'].sum(),
+                "Mau Comp.": df_turma['Mau_Comportamento'].sum(),
+                "Q. Excelência": df_turma['QE'].sum(),
+                "Q. Valor": df_turma['QV'].sum()
+            }
+            
+            for org in origens_unicas:
+                estatisticas_turma[f"Vindos do {org}"] = len(df_turma[df_turma['Turma_Origem'] == org])
+                
+            resumo_dados.append(estatisticas_turma)
+            
+    df_resumo = pd.DataFrame(resumo_dados)
+    df_resumo.to_excel(writer, sheet_name="Resumo Estatístico", index=False)
+
+    def diagnosticar_falha(aluno_obj, alvo_obj, t_atual, t_alvo):
+        v_aluno = [v.strip().lower() for v in str(aluno_obj.get('Separar_De_Pais', '')).split(',') if v.strip()]
+        v_alvo = [v.strip().lower() for v in str(alvo_obj.get('Separar_De_Pais', '')).split(',') if v.strip()]
+        n_aluno_l = aluno_obj['Nome'].lower()
+        n_alvo_l = alvo_obj['Nome'].lower()
+        
+        if n_alvo_l in v_aluno or n_aluno_l in v_alvo:
+            return f"Paradoxo: Pedido conflitante dos pais para juntar e separar '{alvo_obj['Nome']}' em simultâneo."
+        if aluno_obj['Lingua'].lower() != alvo_obj['Lingua'].lower():
+            return f"Conflito de Idioma: '{alvo_obj['Nome']}' estuda {alvo_obj['Lingua']} e a quota na turma mista já estava preenchida."
+            
+        for a_turma in turmas.get(t_alvo, []):
+            if a_turma['Nome'].lower() in v_aluno:
+                return f"Veto Direto: Pediu para se afastar de '{a_turma['Nome']}', que já está na turma alvo ({t_alvo})."
+            v_terceiro = [v.strip().lower() for v in str(a_turma.get('Separar_De_Pais', '')).split(',') if v.strip()]
+            if n_aluno_l in v_terceiro:
+                return f"Veto Recebido: O aluno '{a_turma['Nome']}' (na {t_alvo}) tem um pedido imperativo para se afastar deste aluno."
+                
+        for a_turma in turmas.get(t_atual, []):
+            if a_turma['Nome'].lower() in v_alvo:
+                return f"Veto Inverso: O alvo '{alvo_obj['Nome']}' pediu para se afastar de '{a_turma['Nome']}', que está na turma atual ({t_atual})."
+            v_terceiro = [v.strip().lower() for v in str(a_turma.get('Separar_De_Pais', '')).split(',') if v.strip()]
+            if n_alvo_l in v_terceiro:
+                return f"Veto Interno: '{alvo_obj['Nome']}' não pôde vir para a {t_atual} porque '{a_turma['Nome']}' bloqueou a sua entrada."
+                
+        return f"Limite de Lotação Estrito (Máx: 30) ou quebra de grupo imperativo para concretizar a troca."
+
+    validacoes = []
+    for aluno in todos_alunos:
+        nome_aluno = aluno['Nome']
+        nome_aluno_lower = nome_aluno.lower()
+        turma_atual = aluno_turma.get(nome_aluno_lower, "")
+        
+        # Validar Agrupar (Pais) - Lógica "Pelo menos 1"
+        if str(aluno.get('Agrupar_Com_Pais', '')) not in ["", "nan", "None"]:
+            parceiros = [n.strip() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
+            parceiros_na_turma = [p for p in parceiros if p.lower() in aluno_turma and aluno_turma[p.lower()] == turma_atual]
+            
+            if parceiros_na_turma:
+                status = "✅ Cumprido"
+                alvo_str = " OU ".join(parceiros)
+                motivo = f"Ficou colocado com sucesso na mesma turma que: {', '.join(parceiros_na_turma)}"
+            else:
+                status = "❌ Falhou Crítico"
+                alvo_str = " OU ".join(parceiros)
+                motivos_especificos = []
+                for p in parceiros:
+                    if p.lower() in aluno_dit:
+                        alvo_completo = aluno_dit[p.lower()]
+                        turma_alvo = aluno_turma.get(p.lower(), "")
+                        razao = diagnosticar_falha(aluno, alvo_completo, turma_atual, turma_alvo)
+                        motivos_especificos.append(f"-> Com '{alvo_completo['Nome']}': {razao}")
+                    else:
+                        motivos_especificos.append(f"-> Com '{p}': Aluno não existe na base de dados.")
+                motivo = "\n".join(motivos_especificos)
+                
+            validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Pais)", "Alvo": alvo_str, "Turma Aluno": turma_atual, "Turma Alvo": "-", "Estado": status, "Motivo Falha": motivo})
+        
+        # Validar Separar (Pais)
+        if str(aluno.get('Separar_De_Pais', '')) not in ["", "nan", "None"]:
+            vetos = [n.strip() for n in str(aluno['Separar_De_Pais']).split(',') if n.strip()]
+            for v in vetos:
+                v_lower = v.lower()
+                if v_lower in aluno_turma:
+                    turma_alvo = aluno_turma[v_lower]
+                    status = "✅ Cumprido" if turma_atual != turma_alvo else "❌ Falhou Crítico"
+                    motivo = "-" if status.startswith("✅") else "Falha catastrófica de processamento (Limite imperativo violado)."
+                    validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Separar (Pais)", "Alvo": v, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
+
+        # Validar Agrupar (Profs)
+        if str(aluno.get('Agrupar_Com_Professores', '')) not in ["", "nan", "None"]:
+            pedidos_prof = [n.strip() for n in str(aluno['Agrupar_Com_Professores']).split(',') if n.strip()]
+            for p in pedidos_prof:
+                p_lower = p.lower()
+                if p_lower in aluno_turma:
+                    turma_alvo = aluno_turma[p_lower]
+                    status = "✅ Cumprido" if turma_atual == turma_alvo else "⚠️ Ignorado (Sugestão)"
+                    motivo = "-" if status.startswith("✅") else "A sugestão do professor cedeu perante a prioridade de manter a distribuição estatística equitativa."
+                    validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Prof)", "Alvo": p, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
+
+        # Validar Separar (Profs)
+        if str(aluno.get('Separar_De_Professores', '')) not in ["", "nan", "None"]:
+            vetos_prof = [n.strip() for n in str(aluno['Separar_De_Professores']).split(',') if n.strip()]
+            for v in vetos_prof:
+                v_lower = v.lower()
+                if v_lower in aluno_turma:
+                    turma_alvo = aluno_turma[v_lower]
+                    status = "✅ Cumprido" if turma_atual != turma_alvo else "⚠️ Ignorado (Sugestão)"
+                    motivo = "-" if status.startswith("✅") else "A sugestão de separação foi sacrificada para não quebrar limites ou equilibrar outras variáveis (RTP, Mau Comportamento, QE, etc.)."
+                    validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Separar (Prof)", "Alvo": v, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
+
+    if validacoes:
+        pd.DataFrame(validacoes).to_excel(writer, sheet_name="Validação de Pedidos", index=False)
+    else:
+        pd.DataFrame([{"Aviso": "Nenhum pedido registado."}]).to_excel(writer, sheet_name="Validação de Pedidos", index=False)
+
+    writer.close()
+    print(f"\nResultados guardados com sucesso no ficheiro '{ficheiro_saida}'.")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.withdraw()
+
+    print("A aguardar a seleção do ficheiro Excel...")
+    ficheiro_input = filedialog.askopenfilename(
+        title="Selecionar Ficheiro da Base de Dados (Excel)",
+        filetypes=[("Ficheiros Excel", "*.xlsx *.xls")]
+    )
+    
+    if ficheiro_input:
+        try:
+            print(f"\nA processar base de dados: {ficheiro_input}\n")
+            dados_alunos = carregar_e_ordenar_alunos(ficheiro_input)
+            resultado_turmas = distribuir_turmas(dados_alunos, max_por_turma=30)
+            
+            pasta_origem = os.path.dirname(ficheiro_input)
+            ficheiro_saida = os.path.join(pasta_origem, "turmas_finais.xlsx")
+            
+            exportar_resultados(resultado_turmas, dados_alunos, ficheiro_saida)
+            input("\nProcesso concluído com sucesso! Pressiona ENTER para sair...")
+        except Exception as e:
+            print(f"\nOcorreu um erro técnico: {e}")
+            input("Pressiona ENTER para sair...")
+    else:
+        print("Operação cancelada. Nenhum ficheiro selecionado.")    turma_mista = None
+    num_turmas_espanhol = 0
+    
+    for k in range(1, num_total_turmas):
+        if k == 0: continue
+        tamanho_medio = total_espanhol / k
+        if 25 <= tamanho_medio <= max_por_turma:
+            num_turmas_espanhol = k
+            turma_mista = None
+            break
+            
+    if num_turmas_espanhol == 0:
+        num_turmas_espanhol = math.ceil(total_espanhol / media_ideal_alunos)
+        turmas_espanhol = list(reversed(nomes_turmas))[:num_turmas_espanhol]
+        turma_mista = turmas_espanhol[-1]
+        vagas_espanhol_na_mista = total_espanhol % math.floor(media_ideal_alunos)
+        if vagas_espanhol_na_mista == 0 and total_espanhol > 0:
+            vagas_espanhol_na_mista = math.floor(media_ideal_alunos)
+    else:
+        turmas_espanhol = list(reversed(nomes_turmas))[:num_turmas_espanhol]
+        vagas_espanhol_na_mista = 0
+
+    turmas_exclusivas_frances = [t for t in nomes_turmas if t not in turmas_espanhol]
+    alunos_processados = set()
+    lista_alunos = df.to_dict('records')
+
+    def pode_ficar_na_turma_imperativo(aluno, lista_turma):
+        vetos_pais_aluno = [n.strip().lower() for n in aluno['Separar_De_Pais'].split(',') if n.strip()]
+        for integrante in lista_turma:
+            nome_int = integrante['Nome'].lower()
+            if nome_int in vetos_pais_aluno: return False
+            vetos_pais_int = [n.strip().lower() for n in integrante['Separar_De_Pais'].split(',') if n.strip()]
+            if aluno['Nome'].lower() in vetos_pais_int: return False
+        return True
+
+    def avaliar_sugestoes_professores(aluno, lista_turma):
+        score = 0
+        vetos_prof_aluno = [n.strip().lower() for n in aluno['Separar_De_Professores'].split(',') if n.strip()]
+        pedidos_prof_aluno = [n.strip().lower() for n in aluno['Agrupar_Com_Professores'].split(',') if n.strip()]
+        for integrante in lista_turma:
+            nome_int = integrante['Nome'].lower()
+            if nome_int in vetos_prof_aluno: score += 1
+            if nome_int in pedidos_prof_aluno: score -= 1
+            vetos_prof_int = [n.strip().lower() for n in integrante['Separar_De_Professores'].split(',') if n.strip()]
+            pedidos_prof_int = [n.strip().lower() for n in integrante['Agrupar_Com_Professores'].split(',') if n.strip()]
+            if aluno['Nome'].lower() in vetos_prof_int: score += 1
+            if aluno['Nome'].lower() in pedidos_prof_int: score -= 1
+        return score
+
+    def obter_turmas_elegiveis_individual(lingua_aluno):
+        elegiveis = []
+        for t in nomes_turmas:
+            contagem = turmas[t]
+            if len(contagem) + 1 > max_por_turma: continue
+            esp_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'espanhol')
+            fra_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'francês')
+            
+            if lingua_aluno == 'espanhol':
+                if t in turmas_exclusivas_frances: continue
+                if t == turma_mista and esp_na_turma + 1 > vagas_espanhol_na_mista: continue
+                elegiveis.append(t)
+            else:
+                if t in turmas_espanhol and t != turma_mista: continue
+                if t == turma_mista and fra_na_turma + 1 > (media_ideal_alunos - vagas_espanhol_na_mista): continue
+                elegiveis.append(t)
+        return elegiveis if elegiveis else (turmas_espanhol if lingua_aluno == 'espanhol' else turmas_exclusivas_frances)
+
+    def taxa(t, lingua, feature):
+        count = sum(1 for x in turmas[t] if x[feature] == 1 and x['Lingua'].lower() == lingua)
+        if lingua == 'espanhol':
+            cap = vagas_espanhol_na_mista if t == turma_mista else media_ideal_alunos
+        else:
+            cap = (media_ideal_alunos - vagas_espanhol_na_mista) if t == turma_mista else media_ideal_alunos
+        return count / cap if cap > 0 else 0
+
+    def alocar_grupo(grupo_total, misto):
+        if misto:
+            if turma_mista:
+                contagem = turmas[turma_mista]
+                esp_na_mista = sum(1 for x in contagem if x['Lingua'].lower() == 'espanhol')
+                fra_na_mista = sum(1 for x in contagem if x['Lingua'].lower() == 'francês')
+                num_esp_g = sum(1 for x in grupo_total if x['Lingua'].lower() == 'espanhol')
+                num_fra_g = sum(1 for x in grupo_total if x['Lingua'].lower() == 'francês')
+                
+                if (len(contagem) + len(grupo_total) <= max_por_turma and
+                    esp_na_mista + num_esp_g <= vagas_espanhol_na_mista and
+                    fra_na_mista + num_fra_g <= (media_ideal_alunos - vagas_espanhol_na_mista)):
+                    
+                    if all(pode_ficar_na_turma_imperativo(m, turmas[turma_mista]) for m in grupo_total):
+                        for membro in grupo_total:
+                            turmas[turma_mista].append(membro)
+                            alunos_processados.add(membro['Nome'])
+                        return True
+            return False
+        else:
+            lingua_comum = grupo_total[0]['Lingua'].lower()
+            turmas_elegiveis = []
+            for t in nomes_turmas:
+                contagem = turmas[t]
+                if len(contagem) + len(grupo_total) > max_por_turma: continue
+                esp_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'espanhol')
+                fra_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'francês')
+                
+                if lingua_comum == 'espanhol':
+                    if t in turmas_espanhol:
+                        if t == turma_mista and esp_na_turma + len(grupo_total) > vagas_espanhol_na_mista: continue
+                        turmas_elegiveis.append(t)
+                else:
+                    if t in turmas_espanhol and t != turma_mista: continue
+                    if t == turma_mista and fra_na_turma + len(grupo_total) > (media_ideal_alunos - vagas_espanhol_na_mista): continue
+                    turmas_elegiveis.append(t)
+
+            if not turmas_elegiveis: return False
+            
+            turmas_validas = [t for t in turmas_elegiveis if all(pode_ficar_na_turma_imperativo(m, turmas[t]) for m in grupo_total)]
+            if not turmas_validas: turmas_validas = turmas_elegiveis
+            
+            def avaliar_turma_grupo(t):
+                score_rtp = sum(1 for x in turmas[t] if x['RTP'] == 1) if any(g['RTP'] == 1 for g in grupo_total) else 0
+                score_mau = sum(1 for x in turmas[t] if x['Mau_Comportamento'] == 1) if any(g['Mau_Comportamento'] == 1 for g in grupo_total) else 0
+                score_qe = sum(1 for x in turmas[t] if x['QE'] == 1) if any(g['QE'] == 1 for g in grupo_total) else 0
+                origem_count = sum(1 for x in turmas[t] for g in grupo_total if x['Turma_Origem'] == g['Turma_Origem'])
+                score_prof = sum(avaliar_sugestoes_professores(g, turmas[t]) for g in grupo_total)
+                score_qv = sum(1 for x in turmas[t] if x['QV'] == 1) if any(g['QV'] == 1 for g in grupo_total) else 0 
+                score_artes = sum(1 for x in turmas[t] if x['Artes'].lower() == grupo_total[0]['Artes'].lower())
+                return (score_rtp, score_mau, score_qe, origem_count, score_prof, score_qv, score_artes, len(turmas[t]))
+
+            turma_destino = min(turmas_validas, key=avaliar_turma_grupo)
+            for membro in grupo_total:
+                turmas[turma_destino].append(membro)
+                alunos_processados.add(membro['Nome'])
+            return True
+
+    def alocar_individual(aluno):
+        lingua_aluno = aluno['Lingua'].lower()
+        arte_aluno = aluno['Artes'].lower()
+        turmas_elegiveis = obter_turmas_elegiveis_individual(lingua_aluno)
+
+        def key_individual(t):
+            return (
+                taxa(t, lingua_aluno, 'RTP') if aluno['RTP'] == 1 else 0,
+                taxa(t, lingua_aluno, 'Mau_Comportamento') if aluno['Mau_Comportamento'] == 1 else 0,
+                taxa(t, lingua_aluno, 'QE') if aluno['QE'] == 1 else 0,
+                sum(1 for x in turmas[t] if x['Turma_Origem'] == aluno['Turma_Origem']),
+                avaliar_sugestoes_professores(aluno, turmas[t]),
+                taxa(t, lingua_aluno, 'QV') if aluno['QV'] == 1 else 0, 
+                sum(1 for x in turmas[t] if x['Artes'].lower() == arte_aluno),
+                sum(1 for x in turmas[t] if x['Sexo'] == aluno['Sexo']),
+                len(turmas[t])
+            )
+
+        turma_destino = min(turmas_elegiveis, key=key_individual)
+        if not pode_ficar_na_turma_imperativo(aluno, turmas[turma_destino]):
+            alternativas = [t for t in turmas_elegiveis if t != turma_destino and pode_ficar_na_turma_imperativo(aluno, turmas[t])]
+            if alternativas: turma_destino = min(alternativas, key=key_individual)
+
+        turmas[turma_destino].append(aluno)
+        alunos_processados.add(aluno['Nome'])
+
     # === FASE 1: CONSTRUÇÃO DE GRUPOS "PELO MENOS 1" ===
     componentes = {a['Nome'].lower(): [a] for a in lista_alunos}
     parent = {a['Nome'].lower(): a['Nome'].lower() for a in lista_alunos}
