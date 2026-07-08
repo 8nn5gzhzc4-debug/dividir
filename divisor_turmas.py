@@ -595,17 +595,44 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         "7.º E": "#1abc9c", "7.º F": "#34495e", "7.º G": "#e74c3c", "7.º H": "#2ecc71"
     }
 
+    # Definir coordenadas centrais fixas para cada turma criar o efeito de "ilhas" separadas
+    # Dispostos num círculo perfeito para nenhuma turma colidir no ecrã
+    posicoes_turmas = {
+        "7.º A": {"x": -400, "y": -400},
+        "7.º B": {"x": 0,    "y": -500},
+        "7.º C": {"x": 400,  "y": -400},
+        "7.º D": {"x": 500,  "y": 0},
+        "7.º E": {"x": 400,  "y": 400},
+        "7.º F": {"x": 0,    "y": 500},
+        "7.º G": {"x": -400, "y": 400},
+        "7.º H": {"x": -500, "y": 0}
+    }
+
     for turma_nome, alunos in turmas.items():
-        for aluno in alunos:
+        pos_centro = posicoes_turmas.get(turma_nome, {"x": 0, "y": 0})
+        
+        # Ordenar os alunos alfabeticamente para a estrutura interna do cluster
+        alunos_ordenados = sorted(alunos, key=lambda x: x['Nome'])
+        num_alunos = len(alunos_ordenados)
+        
+        for i, aluno in enumerate(alunos_ordenados):
             aluno_turma[aluno['Nome'].lower()] = turma_nome
             cor = cores_turmas.get(turma_nome, "#bdc3c7")
             
-            # Guardar propriedades para os filtros em JavaScript
+            # Distribui ligeiramente os alunos num micro-círculo em redor do centro da sua própria turma
+            # Isto evita que comecem todos sobrepostos uns em cima dos outros
+            angulo = (2 * math.pi * i) / num_alunos if num_alunos > 0 else 0
+            raio_espalhamento = 80
+            x_inicial = pos_centro["x"] + raio_espalhamento * math.cos(angulo)
+            y_inicial = pos_centro["y"] + raio_espalhamento * math.sin(angulo)
+            
             nodes.append({
                 "id": aluno['Nome'].lower(),
                 "label": aluno['Nome'],
                 "group": turma_nome,
                 "color": cor,
+                "x": x_inicial,
+                "y": y_inicial,
                 "lingua": aluno.get('Lingua', '').lower(),
                 "sexo": aluno.get('Sexo', '').upper(),
                 "rtp": int(aluno.get('RTP', 0)),
@@ -648,7 +675,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
     <html>
     <head>
         <meta charset="utf-8">
-        <title>Painel Interativo de Gestão de Turmas</title>
+        <title>Painel Interativo de Gestão de Turmas - Constelações</title>
         <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
         <style type="text/css">
             body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f6fa; overflow: hidden; }}
@@ -697,14 +724,14 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         </div>
 
         <div id="legend">
-            <strong>Legenda das Turmas:</strong><br>
+            <strong>Ilhas Separadas por Turma:</strong><br>
             <span style="color: #3498db;">● 7.º A</span> | <span style="color: #9b59b6;">● 7.º B</span> | <span style="color: #f1c40f;">● 7.º C</span> | <span style="color: #e67e22;">● 7.º D</span><br>
             <span style="color: #1abc9c;">● 7.º E</span> | <span style="color: #34495e;">● 7.º F</span> | <span style="color: #e74c3c;">● 7.º G</span> | <span style="color: #2ecc71;">● 7.º H</span><br>
             <hr style="border: 0; border-top: 1px solid #ccc; margin: 8px 0;">
-            <strong>Ações Manuais:</strong><br>
-            • Clica e arrasta um aluno para o mover no espaço.<br>
-            • Seleciona uma linha e clica em <em>"Cortar Ligação"</em> para quebrar teias.<br>
-            • Clica duas vezes num aluno para abrir o gestor de transferência de turma.
+            <strong>Análise da Teia Cruzada:</strong><br>
+            • Os alunos começam agrupados no núcleo geográfico da sua própria turma.<br>
+            • Qualquer linha inter-turmas representa um pedido que cruza fronteiras.<br>
+            • Clica duas vezes num nó para transferir o aluno de ilha (turma) manualmente.
         </div>
 
         <div id="sidebar-edit" class="sidebar">
@@ -728,13 +755,21 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             var data = {{ nodes: nodesDataset, edges: edgesDataset }};
             
             var coresTurmas = {json.dumps(cores_turmas)};
+            var posicoesCentrais = {json.dumps(posicoes_turmas)};
             
             var options = {{
                 physics: {{
                     stabilization: true,
-                    barnesHut: {{ gravitationalConstant: -2500, springConstant: 0.04, springLength: 120 }}
+                    solver: 'forceAtlas2Based',
+                    forceAtlas2Based: {{
+                        gravitationalConstant: -90,
+                        centralGravity: 0.01,
+                        springConstant: 0.05,
+                        springLength: 70,
+                        avoidOverlap: 1
+                    }}
                 }},
-                nodes: {{ shape: 'dot', size: 16, font: {{ size: 12, face: 'Segoe UI' }}, borderWidth: 2 }},
+                nodes: {{ shape: 'dot', size: 15, font: {{ size: 12, face: 'Segoe UI' }}, borderWidth: 2 }},
                 edges: {{ smooth: {{ type: 'continuous' }}, width: 2 }},
                 interaction: {{ hover: true, selectConnectedEdges: false }}
             }};
@@ -742,7 +777,6 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             var network = new vis.Network(container, data, options);
             var alunoSelecionadoId = null;
 
-            // FILTROS VISUAIS DINÂMICOS
             function aplicarFiltros() {{
                 var fLingua = document.getElementById('filter-lingua').value;
                 var fSexo = document.getElementById('filter-sexo').value;
@@ -755,33 +789,26 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     if (fVuln === 'rtp' && node.rtp !== 1) visivel = false;
                     if (fVuln === 'mau' && node.mau !== 1) visivel = false;
 
-                    if (visivel) {{
-                        nodesDataset.update({{id: node.id, hidden: false}});
-                    }} else {{
-                        nodesDataset.update({{id: node.id, hidden: true}});
-                    }}
+                    nodesDataset.update({{id: node.id, hidden: !visivel}});
                 }});
             }}
 
-            // INTERATIVIDADE: CORTAR A TEIA MANUAMENTE
             function cortarTeiaSelecionada() {{
                 var selectedEdges = network.getSelectedEdges();
                 if (selectedEdges.length > 0) {{
                     selectedEdges.forEach(function(edgeId) {{
                         edgesDataset.remove(edgeId);
-                        // Atualizar a lista de registo em memória
                         rawEdges = rawEdges.filter(e => e.id !== edgeId);
                     }});
                     alert("A ligação selecionada foi eliminada da teia com sucesso!");
                 }} else {{
-                    alert("Por favor, clica primeiro numa das linhas (verdes ou vermelhas) para a selecionar.");
+                    alert("Por favor, clica primeiro numa das linhas para a selecionar.");
                 }}
             }}
 
-            // INTERATIVIDADE: ALTERAR A TURMA MANUALMENTE
             network.on("doubleClick", function(params) {{
                 if (params.nodes.length > 0) {{
-                    var node==id = params.nodes[0];
+                    var nodeId = params.nodes[0];
                     var node = nodesDataset.get(nodeId);
                     alunoSelecionadoId = nodeId;
 
@@ -805,23 +832,28 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
 
             function confirmarMudancaTurma() {{
                 if (!alunoSelecionadoId) return;
-                var novaTurma = document.getElementById('sidebar-edit').value;
                 var novaTurma = document.getElementById('edit-turma').value;
                 var novaCor = coresTurmas[novaTurma];
+                var novaPos = posicoesCentrais[novaTurma];
 
-                // Atualizar nó no motor gráfico e no array em memória
-                nodesDataset.update({{id: alunoSelecionadoId, group: novaTurma, color: novaCor}});
-                rawNodes = rawNodes.map(n => n.id === alunoSelecionadoId ? {{...n, group: novaTurma, color: novaCor}} : n);
+                // Ao mudar de turma, empurramos as coordenadas iniciais do nó para o novo cluster central
+                nodesDataset.update({{
+                    id: alunoSelecionadoId, 
+                    group: novaTurma, 
+                    color: novaCor,
+                    x: novaPos.x,
+                    y: novaPos.y
+                }});
+                
+                rawNodes = rawNodes.map(n => n.id === alunoSelecionadoId ? {{...n, group: novaTurma, color: novaCor, x: novaPos.x, y: novaPos.y}} : n);
 
-                // Re-executar o título com a nova turma
                 var nodeAtualizado = nodesDataset.get(alunoSelecionadoId);
-                alert(nodeAtualizado.label + " foi transferido com sucesso para a turma " + novaTurma + "!");
+                alert(nodeAtualizado.label + " foi transferido fisicamente para a ilha da turma " + novaTurma + "!");
                 
                 document.getElementById('sidebar-edit').style.display = 'none';
                 alunoSelecionadoId = null;
             }}
 
-            // EXPORTAÇÃO COMPILADA MANUAL
             function exportarConfiguracaoManual() {{
                 var finalDistribution = {{}};
                 Object.keys(coresTurmas).forEach(t => finalDistribution[t] = []);
@@ -833,7 +865,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     }}
                 }});
 
-                var txtOutput = "=== DISTRIBUIÇÃO MANUAMENTE ALTERADA VIA GRAFO ===\\n\\n";
+                var txtOutput = "=== DISTRIBUIÇÃO MANUAMENTE ALTERADA POR CONSTELAÇÃO DE TURMAS ===\\n\\n";
                 Object.keys(finalDistribution).forEach(function(t) {{
                     txtOutput += "--- " + t + " (" + finalDistribution[t].length + " alunos) ---\\n";
                     finalDistribution[t].sort();
@@ -844,7 +876,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 var blob = new Blob([txtOutput], {{type: "text/plain;charset=utf-8"}});
                 var a = document.createElement("a");
                 a.href = URL.createObjectURL(blob);
-                a.download = "turmas_alteradas_manualmente.txt";
+                a.download = "turmas_constelacao_final.txt";
                 a.click();
             }}
         </script>
@@ -853,7 +885,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
     """
     with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
         f.write(html_content)
-    print(f"Mapa analítico e interativo gerado com sucesso em '{ficheiro_saida_html}'.")
+    print(f"Mapa estruturado por agrupamentos geográficos gerado com sucesso em '{ficheiro_saida_html}'.")
 
 if __name__ == "__main__":
     root = tk.Tk()
