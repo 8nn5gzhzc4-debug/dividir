@@ -592,7 +592,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
     
     cores_turmas = {
         "7.º A": "#3498db", "7.º B": "#9b59b6", "7.º C": "#f1c40f", "7.º D": "#e67e22",
-        "7.º E": "#1abc9c", "7.º F": "#34495e", "7.º G": "#ecf0f1", "7.º H": "#95a5a6"
+        "7.º E": "#1abc9c", "7.º F": "#34495e", "7.º G": "#e74c3c", "7.º H": "#2ecc71"
     }
 
     for turma_nome, alunos in turmas.items():
@@ -600,92 +600,260 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             aluno_turma[aluno['Nome'].lower()] = turma_nome
             cor = cores_turmas.get(turma_nome, "#bdc3c7")
             
-            detalhes = f"Turma: {turma_nome}\\nOrigem: {aluno.get('Turma_Origem', '')}\\nRTP: {aluno.get('RTP', 0)}"
+            # Guardar propriedades para os filtros em JavaScript
             nodes.append({
                 "id": aluno['Nome'].lower(),
                 "label": aluno['Nome'],
                 "group": turma_nome,
                 "color": cor,
-                "title": detalhes
+                "lingua": aluno.get('Lingua', '').lower(),
+                "sexo": aluno.get('Sexo', '').upper(),
+                "rtp": int(aluno.get('RTP', 0)),
+                "mau": int(aluno.get('Mau_Comportamento', 0)),
+                "title": f"Turma Atual: {turma_nome}<br>Origem: {aluno.get('Turma_Origem', '')}<br>Idioma: {aluno.get('Lingua', '')}<br>Género: {aluno.get('Sexo', '')}"
             })
 
     for aluno in lista_alunos:
         nome_l = aluno['Nome'].lower()
         if nome_l not in aluno_turma: continue
 
-        # Agrupar Pais (Verde, Seta Sólida)
+        # Ligações de Agrupamento (Verde)
         pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
         for p in pedidos:
             if p in aluno_turma:
                 edges.append({
+                    "id": f"edge_{nome_l}_{p}",
                     "from": nome_l, 
                     "to": p, 
-                    "color": {"color": "#2ecc71"}, 
-                    "arrows": "to", 
-                    "title": "Agrupar (Pais)"
+                    "color": {"color": "#2ecc71", "highlight": "#27ae60"}, 
+                    "arrows": "to",
+                    "type": "agrupar"
                 })
 
-        # Separar Pais (Vermelho, Tracejado)
+        # Ligações de Separação (Vermelho)
         vetos = [n.strip().lower() for n in str(aluno.get('Separar_De_Pais', '')).split(',') if n.strip()]
         for v in vetos:
             if v in aluno_turma:
                 edges.append({
+                    "id": f"edge_{nome_l}_{v}",
                     "from": nome_l, 
                     "to": v, 
-                    "color": {"color": "#e74c3c"}, 
+                    "color": {"color": "#e74c3c", "highlight": "#c0392b"}, 
                     "dashes": True, 
-                    "arrows": "to", 
-                    "title": "Separar (Pais)"
+                    "arrows": "to",
+                    "type": "separar"
                 })
 
     html_content = f"""
     <html>
     <head>
         <meta charset="utf-8">
-        <title>Mapa de Ligações - Turmas</title>
+        <title>Painel Interativo de Gestão de Turmas</title>
         <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
         <style type="text/css">
-            body {{ font-family: sans-serif; margin: 0; padding: 0; }}
-            #mynetwork {{ width: 100vw; height: 100vh; background-color: #fafafa; }}
-            #legend {{ position: absolute; top: 10px; left: 10px; background: white; padding: 10px; border: 1px solid #ccc; border-radius: 5px; z-index: 999; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);}}
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f6fa; overflow: hidden; }}
+            #mynetwork {{ width: 100vw; height: calc(100vh - 70px); background-color: #ffffff; border-top: 1px solid #dcdde1; }}
+            #control-panel {{ height: 70px; background-color: #2f3640; color: white; display: flex; align-items: center; padding: 0 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); z-index: 1000; position: relative; gap: 20px; }}
+            .filter-group {{ display: flex; align-items: center; gap: 8px; font-size: 14px; }}
+            select, button {{ padding: 8px 12px; border-radius: 4px; border: none; font-size: 14px; background-color: #f5f6fa; cursor: pointer; }}
+            select:focus, button:focus {{ outline: none; }}
+            button.btn-action {{ background-color: #4cd137; color: white; font-weight: bold; margin-left: auto; transition: background 0.2s; }}
+            button.btn-action:hover {{ background-color: #44bd32; }}
+            button.btn-danger {{ background-color: #e84118; color: white; font-weight: bold; }}
+            button.btn-danger:hover {{ background-color: #c23616; }}
+            #legend {{ position: absolute; bottom: 20px; left: 20px; background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 13px; line-height: 1.8; z-index: 999; pointer-events: none; }}
+            .sidebar {{ position: absolute; top: 90px; right: 20px; background: rgba(47, 54, 64, 0.95); color: white; padding: 20px; border-radius: 6px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 280px; z-index: 999; display: none; }}
+            .sidebar h3 {{ margin-top: 0; border-bottom: 1px solid #718093; padding-bottom: 8px; }}
         </style>
     </head>
     <body>
-        <div id="legend">
-            <strong>Legenda:</strong><br>
-            <span style="color: #2ecc71;">&#8594; Linha Verde:</span> Pedido de Agrupamento<br>
-            <span style="color: #e74c3c;">&#8604; Linha Vermelha (Tracejada):</span> Pedido de Separação<br>
-            <em>Podes arrastar os alunos e fazer scroll para aplicar zoom. Clica num aluno para ver detalhes.</em>
+        <div id="control-panel">
+            <div class="filter-group">
+                <label>Idioma:</label>
+                <select id="filter-lingua" onchange="aplicarFiltros()">
+                    <option value="todos">Todos</option>
+                    <option value="espanhol">Espanhol</option>
+                    <option value="francês">Francês</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Género:</label>
+                <select id="filter-sexo" onchange="aplicarFiltros()">
+                    <option value="todos">Todos</option>
+                    <option value="m">Rapazes (M)</option>
+                    <option value="f">Raparigas (F)</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Vulnerabilidade:</label>
+                <select id="filter-vulnerabilidade" onchange="aplicarFiltros()">
+                    <option value="todos">Todos</option>
+                    <option value="rtp">Apenas RTP</option>
+                    <option value="mau">Apenas Mau Comportamento</option>
+                </select>
+            </div>
+            <button class="btn-danger" onclick="cortarTeiaSelecionada()">Cortar Ligação Selecionada</button>
+            <button class="btn-action" onclick="exportarConfiguracaoManual()">Exportar Distribuição Final</button>
         </div>
+
+        <div id="legend">
+            <strong>Legenda das Turmas:</strong><br>
+            <span style="color: #3498db;">● 7.º A</span> | <span style="color: #9b59b6;">● 7.º B</span> | <span style="color: #f1c40f;">● 7.º C</span> | <span style="color: #e67e22;">● 7.º D</span><br>
+            <span style="color: #1abc9c;">● 7.º E</span> | <span style="color: #34495e;">● 7.º F</span> | <span style="color: #e74c3c;">● 7.º G</span> | <span style="color: #2ecc71;">● 7.º H</span><br>
+            <hr style="border: 0; border-top: 1px solid #ccc; margin: 8px 0;">
+            <strong>Ações Manuais:</strong><br>
+            • Clica e arrasta um aluno para o mover no espaço.<br>
+            • Seleciona uma linha e clica em <em>"Cortar Ligação"</em> para quebrar teias.<br>
+            • Clica duas vezes num aluno para abrir o gestor de transferência de turma.
+        </div>
+
+        <div id="sidebar-edit" class="sidebar">
+            <h3 id="edit-nome">Nome do Aluno</h3>
+            <p id="edit-info"></p>
+            <label for="edit-turma">Mover para a Turma:</label><br><br>
+            <select id="edit-turma" style="width: 100%; background: white; color: black;"></select><br><br>
+            <button class="btn-action" style="width: 100%; margin: 0;" onclick="confirmarMudancaTurma()">Confirmar Transferência</button>
+        </div>
+
         <div id="mynetwork"></div>
+
         <script type="text/javascript">
-            var nodes = new vis.DataSet({json.dumps(nodes)});
-            var edges = new vis.DataSet({json.dumps(edges)});
+            var rawNodes = {json.dumps(nodes)};
+            var rawEdges = {json.dumps(edges)};
+            
+            var nodesDataset = new vis.DataSet(rawNodes);
+            var edgesDataset = new vis.DataSet(rawEdges);
+            
             var container = document.getElementById('mynetwork');
-            var data = {{ nodes: nodes, edges: edges }};
+            var data = {{ nodes: nodesDataset, edges: edgesDataset }};
+            
+            var coresTurmas = {json.dumps(cores_turmas)};
+            
             var options = {{
                 physics: {{
-                    stabilization: false,
-                    barnesHut: {{ gravitationalConstant: -3000, springConstant: 0.04, springLength: 150 }}
+                    stabilization: true,
+                    barnesHut: {{ gravitationalConstant: -2500, springConstant: 0.04, springLength: 120 }}
                 }},
-                nodes: {{
-                    shape: 'dot',
-                    size: 15,
-                    font: {{ size: 12, face: 'Tahoma' }},
-                    borderWidth: 2
-                }},
-                edges: {{
-                    smooth: {{ type: 'continuous' }}
-                }}
+                nodes: {{ shape: 'dot', size: 16, font: {{ size: 12, face: 'Segoe UI' }}, borderWidth: 2 }},
+                edges: {{ smooth: {{ type: 'continuous' }}, width: 2 }},
+                interaction: {{ hover: true, selectConnectedEdges: false }}
             }};
+            
             var network = new vis.Network(container, data, options);
+            var alunoSelecionadoId = null;
+
+            // FILTROS VISUAIS DINÂMICOS
+            function aplicarFiltros() {{
+                var fLingua = document.getElementById('filter-lingua').value;
+                var fSexo = document.getElementById('filter-sexo').value;
+                var fVuln = document.getElementById('filter-vulnerabilidade').value;
+
+                rawNodes.forEach(function(node) {{
+                    var visivel = true;
+                    if (fLingua !== 'todos' && node.lingua !== fLingua) visivel = false;
+                    if (fSexo !== 'todos' && node.sexo.toLowerCase() !== fSexo) visivel = false;
+                    if (fVuln === 'rtp' && node.rtp !== 1) visivel = false;
+                    if (fVuln === 'mau' && node.mau !== 1) visivel = false;
+
+                    if (visivel) {{
+                        nodesDataset.update({{id: node.id, hidden: false}});
+                    }} else {{
+                        nodesDataset.update({{id: node.id, hidden: true}});
+                    }}
+                }});
+            }}
+
+            // INTERATIVIDADE: CORTAR A TEIA MANUAMENTE
+            function cortarTeiaSelecionada() {{
+                var selectedEdges = network.getSelectedEdges();
+                if (selectedEdges.length > 0) {{
+                    selectedEdges.forEach(function(edgeId) {{
+                        edgesDataset.remove(edgeId);
+                        // Atualizar a lista de registo em memória
+                        rawEdges = rawEdges.filter(e => e.id !== edgeId);
+                    }});
+                    alert("A ligação selecionada foi eliminada da teia com sucesso!");
+                }} else {{
+                    alert("Por favor, clica primeiro numa das linhas (verdes ou vermelhas) para a selecionar.");
+                }}
+            }}
+
+            // INTERATIVIDADE: ALTERAR A TURMA MANUALMENTE
+            network.on("doubleClick", function(params) {{
+                if (params.nodes.length > 0) {{
+                    var node==id = params.nodes[0];
+                    var node = nodesDataset.get(nodeId);
+                    alunoSelecionadoId = nodeId;
+
+                    document.getElementById('edit-nome').innerText = node.label;
+                    document.getElementById('edit-info').innerHTML = node.title;
+
+                    var selectTurma = document.getElementById('edit-turma');
+                    selectTurma.innerHTML = '';
+                    
+                    Object.keys(coresTurmas).forEach(function(tNome) {{
+                        var opt = document.createElement('option');
+                        opt.value = tNome;
+                        opt.innerText = tNome;
+                        if (tNome === node.group) opt.selected = true;
+                        selectTurma.appendChild(opt);
+                    }});
+
+                    document.getElementById('sidebar-edit').style.display = 'block';
+                }}
+            }});
+
+            function confirmarMudancaTurma() {{
+                if (!alunoSelecionadoId) return;
+                var novaTurma = document.getElementById('sidebar-edit').value;
+                var novaTurma = document.getElementById('edit-turma').value;
+                var novaCor = coresTurmas[novaTurma];
+
+                // Atualizar nó no motor gráfico e no array em memória
+                nodesDataset.update({{id: alunoSelecionadoId, group: novaTurma, color: novaCor}});
+                rawNodes = rawNodes.map(n => n.id === alunoSelecionadoId ? {{...n, group: novaTurma, color: novaCor}} : n);
+
+                // Re-executar o título com a nova turma
+                var nodeAtualizado = nodesDataset.get(alunoSelecionadoId);
+                alert(nodeAtualizado.label + " foi transferido com sucesso para a turma " + novaTurma + "!");
+                
+                document.getElementById('sidebar-edit').style.display = 'none';
+                alunoSelecionadoId = null;
+            }}
+
+            // EXPORTAÇÃO COMPILADA MANUAL
+            function exportarConfiguracaoManual() {{
+                var finalDistribution = {{}};
+                Object.keys(coresTurmas).forEach(t => finalDistribution[t] = []);
+
+                rawNodes.forEach(function(node) {{
+                    var grafNode = nodesDataset.get(node.id);
+                    if(finalDistribution[grafNode.group]) {{
+                        finalDistribution[grafNode.group].push(grafNode.label);
+                    }}
+                }});
+
+                var txtOutput = "=== DISTRIBUIÇÃO MANUAMENTE ALTERADA VIA GRAFO ===\\n\\n";
+                Object.keys(finalDistribution).forEach(function(t) {{
+                    txtOutput += "--- " + t + " (" + finalDistribution[t].length + " alunos) ---\\n";
+                    finalDistribution[t].sort();
+                    finalDistribution[t].forEach(nome => txtOutput += "  • " + nome + "\\n");
+                    txtOutput += "\\n";
+                }});
+
+                var blob = new Blob([txtOutput], {{type: "text/plain;charset=utf-8"}});
+                var a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = "turmas_alteradas_manualmente.txt";
+                a.click();
+            }}
         </script>
     </body>
     </html>
     """
     with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
         f.write(html_content)
-    print(f"Mapa visual gerado com sucesso no ficheiro '{ficheiro_saida_html}'.")
+    print(f"Mapa analítico e interativo gerado com sucesso em '{ficheiro_saida_html}'.")
 
 if __name__ == "__main__":
     root = tk.Tk()
