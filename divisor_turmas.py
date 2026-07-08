@@ -595,8 +595,6 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         "7.º E": "#1abc9c", "7.º F": "#34495e", "7.º G": "#e74c3c", "7.º H": "#2ecc71"
     }
 
-    # Definir coordenadas centrais fixas para cada turma criar o efeito de "ilhas" separadas
-    # Dispostos num círculo perfeito para nenhuma turma colidir no ecrã
     posicoes_turmas = {
         "7.º A": {"x": -400, "y": -400},
         "7.º B": {"x": 0,    "y": -500},
@@ -610,8 +608,6 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
 
     for turma_nome, alunos in turmas.items():
         pos_centro = posicoes_turmas.get(turma_nome, {"x": 0, "y": 0})
-        
-        # Ordenar os alunos alfabeticamente para a estrutura interna do cluster
         alunos_ordenados = sorted(alunos, key=lambda x: x['Nome'])
         num_alunos = len(alunos_ordenados)
         
@@ -619,8 +615,6 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             aluno_turma[aluno['Nome'].lower()] = turma_nome
             cor = cores_turmas.get(turma_nome, "#bdc3c7")
             
-            # Distribui ligeiramente os alunos num micro-círculo em redor do centro da sua própria turma
-            # Isto evita que comecem todos sobrepostos uns em cima dos outros
             angulo = (2 * math.pi * i) / num_alunos if num_alunos > 0 else 0
             raio_espalhamento = 80
             x_inicial = pos_centro["x"] + raio_espalhamento * math.cos(angulo)
@@ -637,6 +631,14 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 "sexo": aluno.get('Sexo', '').upper(),
                 "rtp": int(aluno.get('RTP', 0)),
                 "mau": int(aluno.get('Mau_Comportamento', 0)),
+                "qe": int(aluno.get('QE', 0)),
+                "qv": int(aluno.get('QV', 0)),
+                "origem": aluno.get('Turma_Origem', 'Desconhecida'),
+                "artes": aluno.get('Artes', 'Música'),
+                "pedidos_pais": aluno.get('Agrupar_Com_Pais', ''),
+                "vetos_pais": aluno.get('Separar_De_Pais', ''),
+                "pedidos_prof": aluno.get('Agrupar_Com_Professores', ''),
+                "vetos_prof": aluno.get('Separar_De_Professores', ''),
                 "title": f"Turma Atual: {turma_nome}<br>Origem: {aluno.get('Turma_Origem', '')}<br>Idioma: {aluno.get('Lingua', '')}<br>Género: {aluno.get('Sexo', '')}"
             })
 
@@ -644,31 +646,20 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         nome_l = aluno['Nome'].lower()
         if nome_l not in aluno_turma: continue
 
-        # Ligações de Agrupamento (Verde)
         pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
         for p in pedidos:
             if p in aluno_turma:
                 edges.append({
-                    "id": f"edge_{nome_l}_{p}",
-                    "from": nome_l, 
-                    "to": p, 
-                    "color": {"color": "#2ecc71", "highlight": "#27ae60"}, 
-                    "arrows": "to",
-                    "type": "agrupar"
+                    "id": f"edge_{nome_l}_{p}", "from": nome_l, "to": p, 
+                    "color": {"color": "#2ecc71", "highlight": "#27ae60"}, "arrows": "to", "type": "agrupar"
                 })
 
-        # Ligações de Separação (Vermelho)
         vetos = [n.strip().lower() for n in str(aluno.get('Separar_De_Pais', '')).split(',') if n.strip()]
         for v in vetos:
             if v in aluno_turma:
                 edges.append({
-                    "id": f"edge_{nome_l}_{v}",
-                    "from": nome_l, 
-                    "to": v, 
-                    "color": {"color": "#e74c3c", "highlight": "#c0392b"}, 
-                    "dashes": True, 
-                    "arrows": "to",
-                    "type": "separar"
+                    "id": f"edge_{nome_l}_{v}", "from": nome_l, "to": v, 
+                    "color": {"color": "#e74c3c", "highlight": "#c0392b"}, "dashes": True, "arrows": "to", "type": "separar"
                 })
 
     html_content = f"""
@@ -761,13 +752,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 physics: {{
                     stabilization: true,
                     solver: 'forceAtlas2Based',
-                    forceAtlas2Based: {{
-                        gravitationalConstant: -90,
-                        centralGravity: 0.01,
-                        springConstant: 0.05,
-                        springLength: 70,
-                        avoidOverlap: 1
-                    }}
+                    forceAtlas2Based: {{ gravitationalConstant: -90, centralGravity: 0.01, springConstant: 0.05, springLength: 70, avoidOverlap: 1 }}
                 }},
                 nodes: {{ shape: 'dot', size: 15, font: {{ size: 12, face: 'Segoe UI' }}, borderWidth: 2 }},
                 edges: {{ smooth: {{ type: 'continuous' }}, width: 2 }},
@@ -836,48 +821,102 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 var novaCor = coresTurmas[novaTurma];
                 var novaPos = posicoesCentrais[novaTurma];
 
-                // Ao mudar de turma, empurramos as coordenadas iniciais do nó para o novo cluster central
-                nodesDataset.update({{
-                    id: alunoSelecionadoId, 
-                    group: novaTurma, 
-                    color: novaCor,
-                    x: novaPos.x,
-                    y: novaPos.y
-                }});
-                
+                nodesDataset.update({{ id: alunoSelecionadoId, group: novaTurma, color: novaCor, x: novaPos.x, y: novaPos.y }});
                 rawNodes = rawNodes.map(n => n.id === alunoSelecionadoId ? {{...n, group: novaTurma, color: novaCor, x: novaPos.x, y: novaPos.y}} : n);
 
-                var nodeAtualizado = nodesDataset.get(alunoSelecionadoId);
-                alert(nodeAtualizado.label + " foi transferido fisicamente para a ilha da turma " + novaTurma + "!");
-                
                 document.getElementById('sidebar-edit').style.display = 'none';
                 alunoSelecionadoId = null;
             }}
 
+            // EXPORTAÇÃO WEB AVANÇADA (SIMULAÇÃO DO RELATÓRIO DO EXCEL)
             function exportarConfiguracaoManual() {{
-                var finalDistribution = {{}};
-                Object.keys(coresTurmas).forEach(t => finalDistribution[t] = []);
+                var localizacaoMap = {};
+                var turmasAgrupadas = {};
+                var mapaObjetos = {};
+                
+                Object.keys(coresTurmas).forEach(function(t) {{ turmasAgrupadas[t] = []; }});
 
-                rawNodes.forEach(function(node) {{
-                    var grafNode = nodesDataset.get(node.id);
-                    if(finalDistribution[grafNode.group]) {{
-                        finalDistribution[grafNode.group].push(grafNode.label);
-                    }}
+                rawNodes.forEach(function(origNode) {{
+                    var nGraf = nodesDataset.get(origNode.id);
+                    localizacaoMap[origNode.id] = nGraf.group;
+                    mapaObjetos[origNode.id] = origNode;
+                    turmasAgrupadas[nGraf.group].push(origNode);
                 }});
 
-                var txtOutput = "=== DISTRIBUIÇÃO MANUAMENTE ALTERADA POR CONSTELAÇÃO DE TURMAS ===\\n\\n";
-                Object.keys(finalDistribution).forEach(function(t) {{
-                    txtOutput += "--- " + t + " (" + finalDistribution[t].length + " alunos) ---\\n";
-                    finalDistribution[t].sort();
-                    finalDistribution[t].forEach(nome => txtOutput += "  • " + nome + "\\n");
+                var txtOutput = "=========================================================================\\n";
+                txtOutput += "   RELATÓRIO DE ALTERAÇÃO MANUAL - ARQUITETURA DE MATRIZ DE TURMAS\\n";
+                txtOutput += "=========================================================================\\n\\n";
+
+                // PARTE 1: ALUNOS POR TURMA (ORDEM ALFABÉTICA)
+                txtOutput += "=== 1. COMPOSIÇÃO NOMINAL DAS TURMAS ===\\n\\n";
+                Object.keys(turmasAgrupadas).forEach(function(t) {{
+                    txtOutput += "--- " + t + " (" + turmasAgrupadas[t].length + " alunos) ---\\n";
+                    turmasAgrupadas[t].sort((a,b) => a.label.localeCompare(b.label));
+                    
+                    turmasAgrupadas[t].forEach(function(a) {{
+                        var rtpStr = a.rtp === 1 ? "[RTP]" : "";
+                        var mauStr = a.mau === 1 ? "[MAU]" : "";
+                        var qeStr = a.qe === 1 ? "[QE]" : "";
+                        var qvStr = a.qv === 1 ? "[QV]" : "";
+                        var tags = [rtpStr, mauStr, qeStr, qvStr].filter(x => x!=="").join(" ");
+                        tags = tags !== "" ? " " + tags : "";
+                        
+                        txtOutput += "  • " + a.label.padEnd(35) + " | " + a.sexo + " | " + a.lingua.toUpperCase().padEnd(9) + " | Origem: " + a.origem.padEnd(6) + tags + "\\n";
+                    }});
                     txtOutput += "\\n";
                 }});
 
+                // PARTE 2: RESUMO ESTATÍSTICO COMPILADO
+                txtOutput += "=== 2. RESUMO ESTATÍSTICO DE TRAÇO DE VARIÁVEIS ===\\n\\n";
+                txtOutput += "Turma      | Total | Masc(M) | Fem(F) | Espanhol | Francês | RTP | Mau Comp | Q.Exc | Q.Val \\n";
+                txtOutput += "-----------|-------|---------|--------|----------|---------|-----|----------|-------|-------\\n";
+                
+                Object.keys(turmasAgrupadas).forEach(function(t) {{
+                    var list = turmasAgrupadas[t];
+                    var m = list.filter(x => x.sexo === 'M').length;
+                    var f = list.filter(x => x.sexo === 'F').length;
+                    var esp = list.filter(x => x.lingua === 'espanhol').length;
+                    var fra = list.filter(x => x.lingua === 'francês').length;
+                    var rtp = list.filter(x => x.rtp === 1).length;
+                    var mau = list.filter(x => x.mau === 1).length;
+                    var qe = list.filter(x => x.qe === 1).length;
+                    var qv = list.filter(x => x.qv === 1).length;
+
+                    txtOutput += t.padEnd(10) + " | " + 
+                                 list.length.toString().padEnd(5) + " | " + 
+                                 m.toString().padEnd(7) + " | " + 
+                                 f.toString().padEnd(6) + " | " + 
+                                 esp.toString().padEnd(8) + " | " + 
+                                 fra.toString().padEnd(7) + " | " + 
+                                 rtp.toString().padEnd(3) + " | " + 
+                                 mau.toString().padEnd(8) + " | " + 
+                                 qe.toString().padEnd(5) + " | " + 
+                                 qv.toString().padEnd(5) + "\\n";
+                }});
+                txtOutput += "\\n";
+
+                // PARTE 3: AUDITORIA DE CRITÉRIOS DE PAIS
+                txtOutput += "=== 3. AUDITORIA ATUALIZADA DE CUMPRIMENTO DE PEDIDOS ===\\n\\n";
+                rawNodes.forEach(function(a) {{
+                    var tAtual = localizacaoMap[a.id];
+                    
+                    if (a.pedidos_pais !== "") {{
+                        var parceiros = a.pedidos_pais.split(',').map(x => x.strip().toLowerCase());
+                        var validos na turma = parceiros.filter(p => localizacaoMap[p] && localizacaoMap[p] === tAtual);
+                        
+                        if (validos na turma.length > 0) {{
+                            txtOutput += "  ✅ [OK] " + a.label + " (" + tAtual + ") -> Pedido Cumprido (Ficou com: " + validos na turma.map(p => mapaObjetos[p].label).join(", ") + ")\\n";
+                        }} else {{
+                            txtOutput += "  ❌ [FALHA] " + a.label + " (" + tAtual + ") -> CRITÉRIO VIOLADO! Afastado de todos os amigos pedidos.\\n";
+                        }}
+                    }}
+                }});
+
                 var blob = new Blob([txtOutput], {{type: "text/plain;charset=utf-8"}});
-                var a = document.createElement("a");
-                a.href = URL.createObjectURL(blob);
-                a.download = "turmas_constelacao_final.txt";
-                a.click();
+                var aLink = document.createElement("a");
+                aLink.href = URL.createObjectURL(blob);
+                aLink.download = "auditoria_e_turmas_manuais.txt";
+                aLink.click();
             }}
         </script>
     </body>
@@ -885,7 +924,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
     """
     with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
         f.write(html_content)
-    print(f"Mapa estruturado por agrupamentos geográficos gerado com sucesso em '{ficheiro_saida_html}'.")
+    print(f"Mapa analítico e interativo gerado com sucesso em '{ficheiro_saida_html}'.")
 
 if __name__ == "__main__":
     root = tk.Tk()
