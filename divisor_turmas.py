@@ -635,10 +635,8 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 "qv": int(aluno.get('QV', 0)),
                 "origem": aluno.get('Turma_Origem', 'Desconhecida'),
                 "artes": aluno.get('Artes', 'Música'),
-                "pedidos_pais": aluno.get('Agrupar_Com_Pais', ''),
-                "vetos_pais": aluno.get('Separar_De_Pais', ''),
-                "pedidos_prof": aluno.get('Agrupar_Com_Professores', ''),
-                "vetos_prof": aluno.get('Separar_De_Professores', ''),
+                "pedidos_pais": aluno.get('Agrupar_Com', ''),
+                "vetos_pais": aluno.get('Separar_De', ''),
                 "title": f"Turma Atual: {turma_nome}<br>Origem: {aluno.get('Turma_Origem', '')}<br>Idioma: {aluno.get('Lingua', '')}<br>Género: {aluno.get('Sexo', '')}"
             })
 
@@ -646,7 +644,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         nome_l = aluno['Nome'].lower()
         if nome_l not in aluno_turma: continue
 
-        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
+        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com', '')).split(',') if n.strip()]
         for p in pedidos:
             if p in aluno_turma:
                 edges.append({
@@ -654,7 +652,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     "color": {"color": "#2ecc71", "highlight": "#27ae60"}, "arrows": "to", "type": "agrupar"
                 })
 
-        vetos = [n.strip().lower() for n in str(aluno.get('Separar_De_Pais', '')).split(',') if n.strip()]
+        vetos = [n.strip().lower() for n in str(aluno.get('Separar_De', '')).split(',') if n.strip()]
         for v in vetos:
             if v in aluno_turma:
                 edges.append({
@@ -662,8 +660,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     "color": {"color": "#e74c3c", "highlight": "#c0392b"}, "dashes": True, "arrows": "to", "type": "separar"
                 })
 
-    html_content = f"""
-    <html>
+    html_content = f"""<html>
     <head>
         <meta charset="utf-8">
         <title>Painel Interativo de Gestão de Turmas - Constelações</title>
@@ -828,11 +825,10 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 alunoSelecionadoId = null;
             }}
 
-            // EXPORTAÇÃO WEB AVANÇADA (SIMULAÇÃO DO RELATÓRIO DO EXCEL)
             function exportarConfiguracaoManual() {{
-                var localizacaoMap = {};
-                var turmasAgrupadas = {};
-                var mapaObjetos = {};
+                var localizacaoMap = {{}};
+                var turmasAgrupadas = {{}};
+                var mapaObjetos = {{}};
                 
                 Object.keys(coresTurmas).forEach(function(t) {{ turmasAgrupadas[t] = []; }});
 
@@ -847,7 +843,6 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 txtOutput += "   RELATÓRIO DE ALTERAÇÃO MANUAL - ARQUITETURA DE MATRIZ DE TURMAS\\n";
                 txtOutput += "=========================================================================\\n\\n";
 
-                // PARTE 1: ALUNOS POR TURMA (ORDEM ALFABÉTICA)
                 txtOutput += "=== 1. COMPOSIÇÃO NOMINAL DAS TURMAS ===\\n\\n";
                 Object.keys(turmasAgrupadas).forEach(function(t) {{
                     txtOutput += "--- " + t + " (" + turmasAgrupadas[t].length + " alunos) ---\\n";
@@ -866,7 +861,6 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     txtOutput += "\\n";
                 }});
 
-                // PARTE 2: RESUMO ESTATÍSTICO COMPILADO
                 txtOutput += "=== 2. RESUMO ESTATÍSTICO DE TRAÇO DE VARIÁVEIS ===\\n\\n";
                 txtOutput += "Turma      | Total | Masc(M) | Fem(F) | Espanhol | Francês | RTP | Mau Comp | Q.Exc | Q.Val \\n";
                 txtOutput += "-----------|-------|---------|--------|----------|---------|-----|----------|-------|-------\\n";
@@ -895,17 +889,16 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 }});
                 txtOutput += "\\n";
 
-                // PARTE 3: AUDITORIA DE CRITÉRIOS DE PAIS
                 txtOutput += "=== 3. AUDITORIA ATUALIZADA DE CUMPRIMENTO DE PEDIDOS ===\\n\\n";
                 rawNodes.forEach(function(a) {{
                     var tAtual = localizacaoMap[a.id];
                     
                     if (a.pedidos_pais !== "") {{
-                        var parceiros = a.pedidos_pais.split(',').map(x => x.strip().toLowerCase());
-                        var validos na turma = parceiros.filter(p => localizacaoMap[p] && localizacaoMap[p] === tAtual);
+                        var parceiros = a.pedidos_pais.split(',').map(x => x.trim().toLowerCase());
+                        var validos = parceiros.filter(p => localizacaoMap[p] && localizacaoMap[p] === tAtual);
                         
-                        if (validos na turma.length > 0) {{
-                            txtOutput += "  ✅ [OK] " + a.label + " (" + tAtual + ") -> Pedido Cumprido (Ficou com: " + validos na turma.map(p => mapaObjetos[p].label).join(", ") + ")\\n";
+                        if (validos.length > 0) {{
+                            txtOutput += "  ✅ [OK] " + a.label + " (" + tAtual + ") -> Pedido Cumprido (Ficou com: " + validos.map(p => mapaObjetos[p].label).join(", ") + ")\\n";
                         }} else {{
                             txtOutput += "  ❌ [FALHA] " + a.label + " (" + tAtual + ") -> CRITÉRIO VIOLADO! Afastado de todos os amigos pedidos.\\n";
                         }}
@@ -920,8 +913,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             }}
         </script>
     </body>
-    </html>
-    """
+    </html>"""
     with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
         f.write(html_content)
     print(f"Mapa analítico e interativo gerado com sucesso em '{ficheiro_saida_html}'.")
