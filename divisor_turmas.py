@@ -27,7 +27,7 @@ def carregar_e_ordenar_alunos(caminho_excel):
     df = df.sort_values(by=['RTP', 'Mau_Comportamento', 'QE', 'QV', 'Sexo'], ascending=[False, False, False, False, True]).reset_index(drop=True)
     return df
 
-def distribuir_turmas(df, max_por_turma=30, limite_excecao=31, max_por_genero=20):
+def distribuir_turmas(df, max_por_turma=30, limite_excecao=30, max_por_genero=19):
     nomes_turmas = ["7.º A", "7.º B", "7.º C", "7.º D", "7.º E", "7.º F", "7.º G", "7.º H"]
     num_total_turmas = len(nomes_turmas)
     turmas = {nome: [] for nome in nomes_turmas}
@@ -689,9 +689,9 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 "qv": int(aluno.get('QV', 0)),
                 "origem": aluno.get('Turma_Origem', 'Desconhecida'),
                 "artes": aluno.get('Artes', 'Música'),
-                "pedidos_pais": aluno.get('Agrupar_Com_Pais', ''),
+                "pedidos_pais": aluno.get('Agrupar_Com_Pais_Orig', ''),
                 "vetos_pais": aluno.get('Separar_De_Pais', ''),
-                "pedidos_prof": aluno.get('Agrupar_Com_Professores', ''),
+                "pedidos_prof": aluno.get('Agrupar_Com_Professores_Orig', ''),
                 "vetos_prof": aluno.get('Separar_De_Professores', ''),
                 "title": f"Turma Atual: {turma_nome}<br>Origem: {aluno.get('Turma_Origem', '')}<br>Idioma: {aluno.get('Lingua', '')}<br>Género: {aluno.get('Sexo', '')}"
             })
@@ -700,7 +700,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         nome_l = aluno['Nome'].lower()
         if nome_l not in aluno_turma: continue
 
-        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
+        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais_Orig', '')).split(',') if n.strip()]
         for p in pedidos:
             if p in aluno_turma:
                 edges.append({
@@ -722,6 +722,8 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         <meta charset="utf-8">
         <title>Painel Interativo de Gestão de Turmas - Constelações</title>
         <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+        <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+        
         <style type="text/css">
             body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f6fa; overflow: hidden; }}
             #mynetwork {{ width: 100vw; height: calc(100vh - 70px); background-color: #ffffff; border-top: 1px solid #dcdde1; }}
@@ -729,8 +731,8 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             .filter-group {{ display: flex; align-items: center; gap: 8px; font-size: 14px; }}
             select, button {{ padding: 8px 12px; border-radius: 4px; border: none; font-size: 14px; background-color: #f5f6fa; cursor: pointer; }}
             select:focus, button:focus {{ outline: none; }}
-            button.btn-action {{ background-color: #4cd137; color: white; font-weight: bold; margin-left: auto; transition: background 0.2s; }}
-            button.btn-action:hover {{ background-color: #44bd32; }}
+            button.btn-action {{ background-color: #27ae60; color: white; font-weight: bold; margin-left: auto; transition: background 0.2s; }}
+            button.btn-action:hover {{ background-color: #2ecc71; }}
             button.btn-danger {{ background-color: #e84118; color: white; font-weight: bold; }}
             button.btn-danger:hover {{ background-color: #c23616; }}
             #legend {{ position: absolute; bottom: 20px; left: 20px; background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 13px; line-height: 1.8; z-index: 999; pointer-events: none; }}
@@ -765,7 +767,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 </select>
             </div>
             <button class="btn-danger" onclick="cortarTeiaSelecionada()">Cortar Ligação Selecionada</button>
-            <button class="btn-action" onclick="exportarConfiguracaoManual()">Exportar Distribuição Final</button>
+            <button class="btn-action" onclick="exportarExcelManual()">📥 Exportar para EXCEL</button>
         </div>
 
         <div id="legend">
@@ -773,10 +775,9 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
             <span style="color: #3498db;">● 7.º A</span> | <span style="color: #9b59b6;">● 7.º B</span> | <span style="color: #f1c40f;">● 7.º C</span> | <span style="color: #e67e22;">● 7.º D</span><br>
             <span style="color: #1abc9c;">● 7.º E</span> | <span style="color: #34495e;">● 7.º F</span> | <span style="color: #e74c3c;">● 7.º G</span> | <span style="color: #2ecc71;">● 7.º H</span><br>
             <hr style="border: 0; border-top: 1px solid #ccc; margin: 8px 0;">
-            <strong>Análise da Teia Cruzada:</strong><br>
-            • Os alunos começam agrupados no núcleo geográfico da sua própria turma.<br>
-            • Qualquer linha inter-turmas representa um pedido que cruza fronteiras.<br>
-            • Clica duas vezes num nó para transferir o aluno de ilha (turma) manualmente.
+            <strong>Ações:</strong><br>
+            • Clica e arrasta um aluno para analisar a teia.<br>
+            • Clica duas vezes num nó para transferir o aluno para outra turma.
         </div>
 
         <div id="sidebar-edit" class="sidebar">
@@ -839,9 +840,9 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                         edgesDataset.remove(edgeId);
                         rawEdges = rawEdges.filter(e => e.id !== edgeId);
                     }});
-                    alert("A ligação selecionada foi eliminada da teia com sucesso!");
+                    alert("Ligação eliminada da visualização com sucesso!");
                 }} else {{
-                    alert("Por favor, clica primeiro numa das linhas para a selecionar.");
+                    alert("Clica numa linha primeiro para a selecionar.");
                 }}
             }}
 
@@ -882,95 +883,96 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 alunoSelecionadoId = null;
             }}
 
-            function exportarConfiguracaoManual() {{
+            // GERAÇÃO DE EXCEL VIA JAVASCRIPT
+            function exportarExcelManual() {{
+                var alunosData = [];
                 var localizacaoMap = {{}};
-                var turmasAgrupadas = {{}};
                 var mapaObjetos = {{}};
-                
-                Object.keys(coresTurmas).forEach(function(t) {{ turmasAgrupadas[t] = []; }});
 
+                // 1. Preparar a lista global atualizada
                 rawNodes.forEach(function(origNode) {{
                     var nGraf = nodesDataset.get(origNode.id);
                     localizacaoMap[origNode.id] = nGraf.group;
                     mapaObjetos[origNode.id] = origNode;
-                    turmasAgrupadas[nGraf.group].push(origNode);
-                }});
-
-                var txtOutput = "=========================================================================\\n";
-                txtOutput += "   RELATÓRIO DE ALTERAÇÃO MANUAL - ARQUITETURA DE MATRIZ DE TURMAS\\n";
-                txtOutput += "=========================================================================\\n\\n";
-
-                txtOutput += "=== 1. COMPOSIÇÃO NOMINAL DAS TURMAS ===\\n\\n";
-                Object.keys(turmasAgrupadas).forEach(function(t) {{
-                    txtOutput += "--- " + t + " (" + turmasAgrupadas[t].length + " alunos) ---\\n";
-                    turmasAgrupadas[t].sort((a,b) => a.label.localeCompare(b.label));
                     
-                    turmasAgrupadas[t].forEach(function(a) {{
-                        var rtpStr = a.rtp === 1 ? "[RTP]" : "";
-                        var mauStr = a.mau === 1 ? "[MAU]" : "";
-                        var qeStr = a.qe === 1 ? "[QE]" : "";
-                        var qvStr = a.qv === 1 ? "[QV]" : "";
-                        var tags = [rtpStr, mauStr, qeStr, qvStr].filter(x => x!=="").join(" ");
-                        tags = tags !== "" ? " " + tags : "";
-                        
-                        txtOutput += "  • " + a.label.padEnd(35) + " | " + a.sexo + " | " + a.lingua.toUpperCase().padEnd(9) + " | Origem: " + a.origem.padEnd(6) + tags + "\\n";
+                    alunosData.push({{
+                        "Nome": origNode.label,
+                        "Turma Final": nGraf.group,
+                        "Sexo": origNode.sexo,
+                        "Idioma": origNode.lingua.charAt(0).toUpperCase() + origNode.lingua.slice(1),
+                        "Turma Origem": origNode.origem,
+                        "RTP": origNode.rtp,
+                        "Mau Comp.": origNode.mau,
+                        "QE": origNode.qe,
+                        "QV": origNode.qv,
+                        "Pedidos (Pais)": origNode.pedidos_pais
                     }});
-                    txtOutput += "\\n";
                 }});
 
-                txtOutput += "=== 2. RESUMO ESTATÍSTICO DE TRAÇO DE VARIÁVEIS ===\\n\\n";
-                txtOutput += "Turma      | Total | Masc(M) | Fem(F) | Espanhol | Francês | RTP | Mau Comp | Q.Exc | Q.Val \\n";
-                txtOutput += "-----------|-------|---------|--------|----------|---------|-----|----------|-------|-------\\n";
+                // Ordenar por Turma e depois Alfabeticamente
+                alunosData.sort(function(a, b) {{
+                    if (a["Turma Final"] === b["Turma Final"]) return a.Nome.localeCompare(b.Nome);
+                    return a["Turma Final"].localeCompare(b["Turma Final"]);
+                }});
+
+                var wb = XLSX.utils.book_new();
+
+                // Aba 1: Listagem
+                var wsAlunos = XLSX.utils.json_to_sheet(alunosData);
+                XLSX.utils.book_append_sheet(wb, wsAlunos, "Listagem Global");
+
+                // Aba 2: Estatísticas
+                var turmasObj = {{}};
+                Object.keys(coresTurmas).forEach(function(t) {{
+                    turmasObj[t] = {{ Total: 0, M: 0, F: 0, Esp: 0, Fra: 0, RTP: 0, Mau: 0, QE: 0, QV: 0 }};
+                }});
+
+                alunosData.forEach(function(a) {{
+                    var t = a["Turma Final"];
+                    turmasObj[t].Total++;
+                    if(a.Sexo === 'M') turmasObj[t].M++;
+                    if(a.Sexo === 'F') turmasObj[t].F++;
+                    if(a.Idioma === 'Espanhol') turmasObj[t].Esp++;
+                    if(a.Idioma === 'Francês') turmasObj[t].Fra++;
+                    if(a.RTP === 1) turmasObj[t].RTP++;
+                    if(a['Mau Comp.'] === 1) turmasObj[t].Mau++;
+                    if(a.QE === 1) turmasObj[t].QE++;
+                    if(a.QV === 1) turmasObj[t].QV++;
+                }});
+
+                var statsArray = Object.keys(turmasObj).map(function(t) {{
+                    return {{ "Turma": t, "Total Alunos": turmasObj[t].Total, "Rapazes": turmasObj[t].M, "Raparigas": turmasObj[t].F, "Espanhol": turmasObj[t].Esp, "Francês": turmasObj[t].Fra, "RTP": turmasObj[t].RTP, "Mau Comp.": turmasObj[t].Mau, "QE": turmasObj[t].QE, "QV": turmasObj[t].QV }};
+                }});
                 
-                Object.keys(turmasAgrupadas).forEach(function(t) {{
-                    var list = turmasAgrupadas[t];
-                    var m = list.filter(x => x.sexo === 'M').length;
-                    var f = list.filter(x => x.sexo === 'F').length;
-                    var esp = list.filter(x => x.lingua === 'espanhol').length;
-                    var fra = list.filter(x => x.lingua === 'francês').length;
-                    var rtp = list.filter(x => x.rtp === 1).length;
-                    var mau = list.filter(x => x.mau === 1).length;
-                    var qe = list.filter(x => x.qe === 1).length;
-                    var qv = list.filter(x => x.qv === 1).length;
+                var wsStats = XLSX.utils.json_to_sheet(statsArray);
+                XLSX.utils.book_append_sheet(wb, wsStats, "Resumo Estatístico");
 
-                    txtOutput += t.padEnd(10) + " | " + 
-                                 list.length.toString().padEnd(5) + " | " + 
-                                 m.toString().padEnd(7) + " | " + 
-                                 f.toString().padEnd(6) + " | " + 
-                                 esp.toString().padEnd(8) + " | " + 
-                                 fra.toString().padEnd(7) + " | " + 
-                                 rtp.toString().padEnd(3) + " | " + 
-                                 mau.toString().padEnd(8) + " | " + 
-                                 qe.toString().padEnd(5) + " | " + 
-                                 qv.toString().padEnd(5) + "\\n";
-                }});
-                txtOutput += "\\n";
-
-                txtOutput += "=== 3. AUDITORIA ATUALIZADA DE CUMPRIMENTO DE PEDIDOS ===\\n\\n";
+                // Aba 3: Auditoria aos Pedidos
+                var valData = [];
                 rawNodes.forEach(function(a) {{
                     var tAtual = localizacaoMap[a.id];
-                    
                     if (a.pedidos_pais !== "") {{
                         var parceiros = a.pedidos_pais.split(',').map(x => x.trim().toLowerCase());
                         var validos = parceiros.filter(p => localizacaoMap[p] && localizacaoMap[p] === tAtual);
-                        
                         if (validos.length > 0) {{
-                            txtOutput += "  ✅ [OK] " + a.label + " (" + tAtual + ") -> Pedido Cumprido (Ficou com: " + validos.map(p => mapaObjetos[p].label).join(", ") + ")\\n";
+                            valData.push({{ "Aluno": a.label, "Tipo Pedido": "Agrupar (Pais)", "Turma": tAtual, "Estado": "✅ Cumprido", "Detalhe": "Ficou com: " + validos.map(p => mapaObjetos[p].label).join(", ") }});
                         }} else {{
-                            txtOutput += "  ❌ [FALHA] " + a.label + " (" + tAtual + ") -> CRITÉRIO VIOLADO! Afastado de todos os amigos pedidos.\\n";
+                            valData.push({{ "Aluno": a.label, "Tipo Pedido": "Agrupar (Pais)", "Turma": tAtual, "Estado": "❌ Falhou", "Detalhe": "Afastado de todos os pedidos originais após alteração manual." }});
                         }}
                     }}
                 }});
+                
+                if(valData.length === 0) valData.push({{"Aviso": "Nenhum pedido registado."}});
+                var wsVal = XLSX.utils.json_to_sheet(valData);
+                XLSX.utils.book_append_sheet(wb, wsVal, "Auditoria de Ligações");
 
-                var blob = new Blob([txtOutput], {{type: "text/plain;charset=utf-8"}});
-                var aLink = document.createElement("a");
-                aLink.href = URL.createObjectURL(blob);
-                aLink.download = "auditoria_e_turmas_manuais.txt";
-                aLink.click();
+                // Gerar o ficheiro .xlsx
+                XLSX.writeFile(wb, "Turmas_Alteradas_Manualmente.xlsx");
             }}
         </script>
     </body>
-    </html>"""
+    </html>
+    """
     
     with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
         f.write(html_content)
