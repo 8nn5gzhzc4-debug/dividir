@@ -1,9 +1,9 @@
 import math
+import json
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog
 import os
-import json
 
 def carregar_e_ordenar_alunos(caminho_excel):
     df = pd.read_excel(caminho_excel)
@@ -22,11 +22,12 @@ def carregar_e_ordenar_alunos(caminho_excel):
     if 'Artes' not in df.columns:
         df['Artes'] = "Música"
     df['Artes'] = df['Artes'].fillna("Música").astype(str)
+    df['Sexo'] = df['Sexo'].fillna("").astype(str).str.upper()
     
     df = df.sort_values(by=['RTP', 'Mau_Comportamento', 'QE', 'QV', 'Sexo'], ascending=[False, False, False, False, True]).reset_index(drop=True)
     return df
 
-def distribuir_turmas(df, max_por_turma=30):
+def distribuir_turmas(df, max_por_turma=30, limite_excecao=31, max_por_genero=20):
     nomes_turmas = ["7.º A", "7.º B", "7.º C", "7.º D", "7.º E", "7.º F", "7.º G", "7.º H"]
     num_total_turmas = len(nomes_turmas)
     turmas = {nome: [] for nome in nomes_turmas}
@@ -61,6 +62,39 @@ def distribuir_turmas(df, max_por_turma=30):
     alunos_processados = set()
     lista_alunos = df.to_dict('records')
 
+    # ====================================================================
+    # PRÉ-PROCESSAMENTO: LIMPEZA DE CONFLITOS DE IDIOMA DA PIPELINE
+    # ====================================================================
+    for aluno in lista_alunos:
+        aluno['Agrupar_Com_Pais_Orig'] = aluno['Agrupar_Com_Pais']
+        aluno['Agrupar_Com_Professores_Orig'] = aluno['Agrupar_Com_Professores']
+        
+        # Filtro Pais
+        pedidos_pais_limpos = []
+        for p in [n.strip() for n in aluno['Agrupar_Com_Pais'].split(',') if n.strip()]:
+            alvo = next((x for x in lista_alunos if x['Nome'].lower() == p.lower()), None)
+            if alvo and alvo['Lingua'].lower() != aluno['Lingua'].lower():
+                print(f"⚠️ FILTRO PIPELINE: Pedido de {aluno['Nome']} para agrupar com {alvo['Nome']} foi removido (Conflito de Idioma).")
+            else:
+                pedidos_pais_limpos.append(p)
+        aluno['Agrupar_Com_Pais'] = ", ".join(pedidos_pais_limpos)
+
+        # Filtro Professores
+        pedidos_prof_limpos = []
+        for p in [n.strip() for n in aluno['Agrupar_Com_Professores'].split(',') if n.strip()]:
+            alvo = next((x for x in lista_alunos if x['Nome'].lower() == p.lower()), None)
+            if alvo and alvo['Lingua'].lower() != aluno['Lingua'].lower():
+                pass # Remove da pipeline
+            else:
+                pedidos_prof_limpos.append(p)
+        aluno['Agrupar_Com_Professores'] = ", ".join(pedidos_prof_limpos)
+
+    # Função Barreira de Género
+    def respeita_limite_genero(lista_turma):
+        m = sum(1 for x in lista_turma if x['Sexo'] == 'M')
+        f = sum(1 for x in lista_turma if x['Sexo'] == 'F')
+        return m <= max_por_genero and f <= max_por_genero
+
     def pode_ficar_na_turma_imperativo(aluno, lista_turma):
         vetos_pais_aluno = [n.strip().lower() for n in aluno['Separar_De_Pais'].split(',') if n.strip()]
         for integrante in lista_turma:
@@ -84,23 +118,32 @@ def distribuir_turmas(df, max_por_turma=30):
             if aluno['Nome'].lower() in pedidos_prof_int: score -= 1
         return score
 
-    def obter_turmas_elegiveis_individual(lingua_aluno):
+    def obter_turmas_elegiveis_individual(aluno_obj, limite_tamanho):
+        lingua_aluno = aluno_obj['Lingua'].lower()
+        sexo_aluno = aluno_obj['Sexo']
         elegiveis = []
+        
         for t in nomes_turmas:
             contagem = turmas[t]
-            if len(contagem) + 1 > max_por_turma: continue
+            if len(contagem) + 1 > limite_tamanho: continue
+            
+            # Bloqueio de Lotação de Género (Máximo 20)
+            if sexo_aluno == 'M' and sum(1 for x in contagem if x['Sexo'] == 'M') >= max_por_genero: continue
+            if sexo_aluno == 'F' and sum(1 for x in contagem if x['Sexo'] == 'F') >= max_por_genero: continue
+            
             esp_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'espanhol')
             fra_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'francês')
             
             if lingua_aluno == 'espanhol':
                 if t in turmas_exclusivas_frances: continue
-                if t == turma_mista and esp_na_turma + 1 > vagas_espanhol_na_mista: continue
+                if t == turma_mista and esp_na_turma + 1 > vagas_espanhol_na_mista and limite_tamanho <= max_por_turma: continue
                 elegiveis.append(t)
             else:
                 if t in turmas_espanhol and t != turma_mista: continue
-                if t == turma_mista and fra_na_turma + 1 > (media_ideal_alunos - vagas_espanhol_na_mista): continue
+                if t == turma_mista and fra_na_turma + 1 > (media_ideal_alunos - vagas_espanhol_na_mista) and limite_tamanho <= max_por_turma: continue
                 elegiveis.append(t)
-        return elegiveis if elegiveis else (turmas_espanhol if lingua_aluno == 'espanhol' else turmas_exclusivas_frances)
+                
+        return elegiveis
 
     def taxa(t, lingua, feature):
         count = sum(1 for x in turmas[t] if x[feature] == 1 and x['Lingua'].lower() == lingua)
@@ -110,7 +153,7 @@ def distribuir_turmas(df, max_por_turma=30):
             cap = (media_ideal_alunos - vagas_espanhol_na_mista) if t == turma_mista else media_ideal_alunos
         return count / cap if cap > 0 else 0
 
-    def alocar_grupo(grupo_total, misto):
+    def tentar_alocar_grupo(grupo_total, misto, limite_tamanho):
         if misto:
             if turma_mista:
                 contagem = turmas[turma_mista]
@@ -119,11 +162,14 @@ def distribuir_turmas(df, max_por_turma=30):
                 num_esp_g = sum(1 for x in grupo_total if x['Lingua'].lower() == 'espanhol')
                 num_fra_g = sum(1 for x in grupo_total if x['Lingua'].lower() == 'francês')
                 
-                if (len(contagem) + len(grupo_total) <= max_por_turma and
-                    esp_na_mista + num_esp_g <= vagas_espanhol_na_mista and
-                    fra_na_mista + num_fra_g <= (media_ideal_alunos - vagas_espanhol_na_mista)):
-                    
-                    if all(pode_ficar_na_turma_imperativo(m, turmas[turma_mista]) for m in grupo_total):
+                condicao_vagas = True
+                if limite_tamanho <= max_por_turma:
+                    condicao_vagas = (esp_na_mista + num_esp_g <= vagas_espanhol_na_mista and
+                                      fra_na_mista + num_fra_g <= (media_ideal_alunos - vagas_espanhol_na_mista))
+                
+                temp_turma = contagem + grupo_total
+                if len(contagem) + len(grupo_total) <= limite_tamanho and condicao_vagas:
+                    if respeita_limite_genero(temp_turma) and all(pode_ficar_na_turma_imperativo(m, contagem) for m in grupo_total):
                         for membro in grupo_total:
                             turmas[turma_mista].append(membro)
                             alunos_processados.add(membro['Nome'])
@@ -134,23 +180,27 @@ def distribuir_turmas(df, max_por_turma=30):
             turmas_elegiveis = []
             for t in nomes_turmas:
                 contagem = turmas[t]
-                if len(contagem) + len(grupo_total) > max_por_turma: continue
+                if len(contagem) + len(grupo_total) > limite_tamanho: continue
+                
+                if not respeita_limite_genero(contagem + grupo_total): continue # Filtro de Género para Grupos
+                
                 esp_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'espanhol')
                 fra_na_turma = sum(1 for x in contagem if x['Lingua'].lower() == 'francês')
                 
                 if lingua_comum == 'espanhol':
                     if t in turmas_espanhol:
-                        if t == turma_mista and esp_na_turma + len(grupo_total) > vagas_espanhol_na_mista: continue
+                        if t == turma_mista and limite_tamanho <= max_por_turma and esp_na_turma + len(grupo_total) > vagas_espanhol_na_mista: continue
                         turmas_elegiveis.append(t)
                 else:
                     if t in turmas_espanhol and t != turma_mista: continue
-                    if t == turma_mista and fra_na_turma + len(grupo_total) > (media_ideal_alunos - vagas_espanhol_na_mista): continue
+                    if t == turma_mista and limite_tamanho <= max_por_turma and fra_na_turma + len(grupo_total) > (media_ideal_alunos - vagas_espanhol_na_mista): continue
                     turmas_elegiveis.append(t)
 
             if not turmas_elegiveis: return False
             
             turmas_validas = [t for t in turmas_elegiveis if all(pode_ficar_na_turma_imperativo(m, turmas[t]) for m in grupo_total)]
-            if not turmas_validas: turmas_validas = turmas_elegiveis
+            if not turmas_validas: 
+                turmas_validas = turmas_elegiveis
             
             def avaliar_turma_grupo(t):
                 score_rtp = sum(1 for x in turmas[t] if x['RTP'] == 1) if any(g['RTP'] == 1 for g in grupo_total) else 0
@@ -160,8 +210,7 @@ def distribuir_turmas(df, max_por_turma=30):
                 score_prof = sum(avaliar_sugestoes_professores(g, turmas[t]) for g in grupo_total)
                 score_qv = sum(1 for x in turmas[t] if x['QV'] == 1) if any(g['QV'] == 1 for g in grupo_total) else 0 
                 score_artes = sum(1 for x in turmas[t] if x['Artes'].lower() == grupo_total[0]['Artes'].lower())
-                score_sexo = sum(1 for x in turmas[t] for g in grupo_total if x['Sexo'].upper() == g['Sexo'].upper())
-                return (score_rtp, score_mau, score_qe, origem_count, score_prof, score_qv, score_sexo, score_artes, len(turmas[t]))
+                return (score_rtp, score_mau, score_qe, origem_count, score_prof, score_qv, score_artes, len(turmas[t]))
 
             turma_destino = min(turmas_validas, key=avaliar_turma_grupo)
             for membro in grupo_total:
@@ -169,21 +218,30 @@ def distribuir_turmas(df, max_por_turma=30):
                 alunos_processados.add(membro['Nome'])
             return True
 
+    def alocar_grupo(grupo_total, misto):
+        if not tentar_alocar_grupo(grupo_total, misto, max_por_turma):
+            tentar_alocar_grupo(grupo_total, misto, limite_excecao)
+
     def alocar_individual(aluno):
-        lingua_aluno = aluno['Lingua'].lower()
-        arte_aluno = aluno['Artes'].lower()
-        turmas_elegiveis = obter_turmas_elegiveis_individual(lingua_aluno)
+        turmas_elegiveis = obter_turmas_elegiveis_individual(aluno, max_por_turma)
+        if not turmas_elegiveis:
+            turmas_elegiveis = obter_turmas_elegiveis_individual(aluno, limite_excecao)
+            
+        if not turmas_elegiveis:
+            # Em último caso absoluto (se houver mais de 160 rapazes não há matemática que salve), força entrada
+            if aluno['Lingua'].lower() == 'espanhol': turmas_elegiveis = turmas_espanhol
+            else: turmas_elegiveis = turmas_exclusivas_frances
 
         def key_individual(t):
             return (
-                taxa(t, lingua_aluno, 'RTP') if aluno['RTP'] == 1 else 0,
-                taxa(t, lingua_aluno, 'Mau_Comportamento') if aluno['Mau_Comportamento'] == 1 else 0,
-                taxa(t, lingua_aluno, 'QE') if aluno['QE'] == 1 else 0,
+                taxa(t, aluno['Lingua'].lower(), 'RTP') if aluno['RTP'] == 1 else 0,
+                taxa(t, aluno['Lingua'].lower(), 'Mau_Comportamento') if aluno['Mau_Comportamento'] == 1 else 0,
+                taxa(t, aluno['Lingua'].lower(), 'QE') if aluno['QE'] == 1 else 0,
                 sum(1 for x in turmas[t] if x['Turma_Origem'] == aluno['Turma_Origem']),
                 avaliar_sugestoes_professores(aluno, turmas[t]),
-                taxa(t, lingua_aluno, 'QV') if aluno['QV'] == 1 else 0, 
-                sum(1 for x in turmas[t] if x['Artes'].lower() == arte_aluno),
-                sum(1 for x in turmas[t] if x['Sexo'].upper() == aluno['Sexo'].upper()),
+                taxa(t, aluno['Lingua'].lower(), 'QV') if aluno['QV'] == 1 else 0, 
+                sum(1 for x in turmas[t] if x['Artes'].lower() == aluno['Artes'].lower()),
+                sum(1 for x in turmas[t] if x['Sexo'] == aluno['Sexo']),
                 len(turmas[t])
             )
 
@@ -208,7 +266,7 @@ def distribuir_turmas(df, max_por_turma=30):
         ra, rb = find(a), find(b)
         if ra != rb:
             novo_grupo = componentes[ra] + componentes[rb]
-            if len(novo_grupo) > max_por_turma: return False
+            if len(novo_grupo) > limite_excecao: return False
             nomes_novo = {m['Nome'].lower() for m in novo_grupo}
             for m in novo_grupo:
                 vetos = {v.strip().lower() for v in m['Separar_De_Pais'].split(',') if v.strip()}
@@ -235,8 +293,7 @@ def distribuir_turmas(df, max_por_turma=30):
         pedidos_a = [n.strip().lower() for n in aluno['Agrupar_Com_Pais'].split(',') if n.strip()]
         if len(pedidos_a) == 1:
             p = pedidos_a[0]
-            if p in parent:
-                merge(nome_a, p)
+            if p in parent: merge(nome_a, p)
 
     for aluno in lista_alunos:
         nome_a = aluno['Nome'].lower()
@@ -245,12 +302,10 @@ def distribuir_turmas(df, max_por_turma=30):
 
         ra = find(nome_a)
         nomes_no_grupo = {m['Nome'].lower() for m in componentes[ra]}
-        
         if any(p in nomes_no_grupo for p in pedidos_a): continue
             
         for p in pedidos_a:
-            if p in parent and merge(nome_a, p):
-                break
+            if p in parent and merge(nome_a, p): break
 
     grupos_de_pedidos_limpos = [g for g in componentes.values() if len(g) > 1]
     grupos_rtp_alta, grupos_rtp_baixa = [], []
@@ -292,7 +347,7 @@ def distribuir_turmas(df, max_por_turma=30):
         nomes_turma = {x['Nome'].lower() for x in lista_turma}
         satisfeitos = set()
         for x in lista_turma:
-            pedidos = [p.strip().lower() for p in x['Agrupar_Com_Pais'].split(',') if p.strip()]
+            pedidos = [p.strip().lower() for p in x['Agrupar_Com_Pais_Orig'].split(',') if p.strip()]
             if any(p in nomes_turma for p in pedidos):
                 satisfeitos.add(x['Nome'].lower())
         return satisfeitos
@@ -333,11 +388,9 @@ def distribuir_turmas(df, max_por_turma=30):
                         temp_atual = [x for x in turmas[turma_atual] if x['Nome'] != aluno['Nome']] + [potencial]
                         temp_alvo = [x for x in turmas[turma_alvo] if x['Nome'] != potencial['Nome']] + [aluno]
                         
-                        sat_atual_depois = alunos_satisfeitos(temp_atual)
-                        sat_alvo_depois = alunos_satisfeitos(temp_alvo)
-                        
-                        if not sat_atual_antes.issubset(sat_atual_depois): continue
-                        if not sat_alvo_antes.issubset(sat_alvo_depois): continue
+                        if not respeita_limite_genero(temp_atual) or not respeita_limite_genero(temp_alvo): continue
+                        if not sat_atual_antes.issubset(alunos_satisfeitos(temp_atual)): continue
+                        if not sat_alvo_antes.issubset(alunos_satisfeitos(temp_alvo)): continue
                         
                         if (pode_ficar_na_turma_imperativo(aluno, temp_alvo) and pode_ficar_na_turma_imperativo(potencial, temp_atual) and
                             avaliar_sugestoes_professores(aluno, temp_alvo) <= 0 and avaliar_sugestoes_professores(potencial, temp_atual) <= 0):
@@ -353,11 +406,9 @@ def distribuir_turmas(df, max_por_turma=30):
                             temp_atual = [x for x in turmas[turma_atual] if x['Nome'] != aluno['Nome']] + [potencial]
                             temp_alvo = [x for x in turmas[turma_alvo] if x['Nome'] != potencial['Nome']] + [aluno]
                             
-                            sat_atual_depois = alunos_satisfeitos(temp_atual)
-                            sat_alvo_depois = alunos_satisfeitos(temp_alvo)
-                            
-                            if not sat_atual_antes.issubset(sat_atual_depois): continue
-                            if not sat_alvo_antes.issubset(sat_alvo_depois): continue
+                            if not respeita_limite_genero(temp_atual) or not respeita_limite_genero(temp_alvo): continue
+                            if not sat_atual_antes.issubset(alunos_satisfeitos(temp_atual)): continue
+                            if not sat_alvo_antes.issubset(alunos_satisfeitos(temp_alvo)): continue
                                 
                             if pode_ficar_na_turma_imperativo(aluno, temp_alvo) and pode_ficar_na_turma_imperativo(potencial, temp_atual):
                                 candidato_troca = potencial
@@ -391,6 +442,7 @@ def distribuir_turmas(df, max_por_turma=30):
                             temp_max = [x for x in turmas[max_t] if x['Nome'] != mau_aluno['Nome']] + [bom_aluno]
                             temp_min = [x for x in turmas[min_t] if x['Nome'] != bom_aluno['Nome']] + [mau_aluno]
                             
+                            if not respeita_limite_genero(temp_max) or not respeita_limite_genero(temp_min): continue
                             if not sat_max_antes.issubset(alunos_satisfeitos(temp_max)): continue
                             if not sat_min_antes.issubset(alunos_satisfeitos(temp_min)): continue
 
@@ -406,21 +458,22 @@ def distribuir_turmas(df, max_por_turma=30):
 
     def balancear_genero():
         for _ in range(40):
-            contagens_M = {t: sum(1 for a in turmas[t] if a['Sexo'].upper() == 'M') for t in nomes_turmas}
+            contagens_M = {t: sum(1 for a in turmas[t] if a['Sexo'] == 'M') for t in nomes_turmas}
             max_t = max(contagens_M, key=contagens_M.get)
             min_t = min(contagens_M, key=contagens_M.get)
             if contagens_M[max_t] - contagens_M[min_t] <= 1: break 
             troca_feita = False
             for rapaz in turmas[max_t]:
-                if rapaz['Sexo'].upper() == 'M':
+                if rapaz['Sexo'] == 'M':
                     sat_max_antes = alunos_satisfeitos(turmas[max_t])
                     for rapariga in turmas[min_t]:
-                        if rapariga['Sexo'].upper() == 'F' and rapariga['Lingua'].lower() == rapaz['Lingua'].lower():
+                        if rapariga['Sexo'] == 'F' and rapariga['Lingua'].lower() == rapaz['Lingua'].lower():
                             if rapaz['RTP'] == rapariga['RTP'] and rapaz['Mau_Comportamento'] == rapariga['Mau_Comportamento']:
                                 sat_min_antes = alunos_satisfeitos(turmas[min_t])
                                 temp_max = [x for x in turmas[max_t] if x['Nome'] != rapaz['Nome']] + [rapariga]
                                 temp_min = [x for x in turmas[min_t] if x['Nome'] != rapariga['Nome']] + [rapaz]
                                 
+                                if not respeita_limite_genero(temp_max) or not respeita_limite_genero(temp_min): continue
                                 if not sat_max_antes.issubset(alunos_satisfeitos(temp_max)): continue
                                 if not sat_min_antes.issubset(alunos_satisfeitos(temp_min)): continue
 
@@ -451,7 +504,7 @@ def diagnosticar_falha(turmas, aluno_obj, alvo_obj, t_atual, t_alvo):
     if n_alvo_l in v_aluno or n_aluno_l in v_alvo:
         return f"Paradoxo: Pedido conflitante dos pais para juntar e separar '{alvo_obj['Nome']}' em simultâneo."
     if aluno_obj['Lingua'].lower() != alvo_obj['Lingua'].lower():
-        return f"Conflito de Idioma: '{alvo_obj['Nome']}' estuda {alvo_obj['Lingua']} e a quota na turma mista já estava preenchida."
+        return f"Conflito de Idioma: '{alvo_obj['Nome']}' estuda {alvo_obj['Lingua']}. O pedido foi retirado do processamento automático."
         
     for a_turma in turmas.get(t_alvo, []):
         if a_turma['Nome'].lower() in v_aluno:
@@ -467,7 +520,7 @@ def diagnosticar_falha(turmas, aluno_obj, alvo_obj, t_atual, t_alvo):
         if n_alvo_l in v_terceiro:
             return f"Veto Interno: '{alvo_obj['Nome']}' não pôde vir para a {t_atual} porque '{a_turma['Nome']}' bloqueou a sua entrada."
             
-    return f"Limite de Lotação ou quebra de grupo imperativo de terceiros para concretizar a troca."
+    return f"Limite rígido de Lotação (Máx: 30/31) ou Limite Rígido de Género (Máx: 20) atingido na turma de destino."
 
 def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"):
     writer = pd.ExcelWriter(ficheiro_saida, engine='openpyxl')
@@ -489,7 +542,7 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
             aluno_dit[aluno['Nome'].lower()] = aluno
         
         if not df_turma.empty:
-            df_salvar = df_turma.drop(columns=['Prioridade'], errors='ignore')
+            df_salvar = df_turma.drop(columns=['Prioridade', 'Agrupar_Com_Pais_Orig', 'Agrupar_Com_Professores_Orig'], errors='ignore')
             if 'Nome' in df_salvar.columns:
                 df_salvar = df_salvar.sort_values(by='Nome')
             df_salvar.to_excel(writer, sheet_name=nome_turma, index=False)
@@ -521,8 +574,9 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
         nome_aluno_lower = nome_aluno.lower()
         turma_atual = aluno_turma.get(nome_aluno_lower, "")
         
-        if str(aluno.get('Agrupar_Com_Pais', '')) not in ["", "nan", "None"]:
-            parceiros = [n.strip() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
+        # Validar usando as strings Originais de Excel, mesmo os que foram cortados da pipeline
+        if str(aluno.get('Agrupar_Com_Pais_Orig', '')) not in ["", "nan", "None"]:
+            parceiros = [n.strip() for n in str(aluno.get('Agrupar_Com_Pais_Orig', '')).split(',') if n.strip()]
             parceiros_na_turma = [p for p in parceiros if p.lower() in aluno_turma and aluno_turma[p.lower()] == turma_atual]
             
             if parceiros_na_turma:
@@ -555,14 +609,14 @@ def exportar_resultados(turmas, df_original, ficheiro_saida="turmas_finais.xlsx"
                     motivo = "-" if status.startswith("✅") else "Falha catastrófica de processamento (Limite imperativo violado)."
                     validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Separar (Pais)", "Alvo": v, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
 
-        if str(aluno.get('Agrupar_Com_Professores', '')) not in ["", "nan", "None"]:
-            pedidos_prof = [n.strip() for n in str(aluno['Agrupar_Com_Professores']).split(',') if n.strip()]
+        if str(aluno.get('Agrupar_Com_Professores_Orig', '')) not in ["", "nan", "None"]:
+            pedidos_prof = [n.strip() for n in str(aluno['Agrupar_Com_Professores_Orig']).split(',') if n.strip()]
             for p in pedidos_prof:
                 p_lower = p.lower()
                 if p_lower in aluno_turma:
                     turma_alvo = aluno_turma[p_lower]
                     status = "✅ Cumprido" if turma_atual == turma_alvo else "⚠️ Ignorado (Sugestão)"
-                    motivo = "-" if status.startswith("✅") else "A sugestão do professor cedeu perante a prioridade de manter a distribuição estatística equitativa."
+                    motivo = "-" if status.startswith("✅") else "A sugestão do professor cedeu perante o filtro de idioma ou a distribuição estatística."
                     validacoes.append({"Aluno": nome_aluno, "Tipo Pedido": "Agrupar (Prof)", "Alvo": p, "Turma Aluno": turma_atual, "Turma Alvo": turma_alvo, "Estado": status, "Motivo Falha": motivo})
 
         if str(aluno.get('Separar_De_Professores', '')) not in ["", "nan", "None"]:
@@ -635,8 +689,10 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                 "qv": int(aluno.get('QV', 0)),
                 "origem": aluno.get('Turma_Origem', 'Desconhecida'),
                 "artes": aluno.get('Artes', 'Música'),
-                "pedidos_pais": aluno.get('Agrupar_Com', ''),
-                "vetos_pais": aluno.get('Separar_De', ''),
+                "pedidos_pais": aluno.get('Agrupar_Com_Pais', ''),
+                "vetos_pais": aluno.get('Separar_De_Pais', ''),
+                "pedidos_prof": aluno.get('Agrupar_Com_Professores', ''),
+                "vetos_prof": aluno.get('Separar_De_Professores', ''),
                 "title": f"Turma Atual: {turma_nome}<br>Origem: {aluno.get('Turma_Origem', '')}<br>Idioma: {aluno.get('Lingua', '')}<br>Género: {aluno.get('Sexo', '')}"
             })
 
@@ -644,7 +700,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         nome_l = aluno['Nome'].lower()
         if nome_l not in aluno_turma: continue
 
-        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com', '')).split(',') if n.strip()]
+        pedidos = [n.strip().lower() for n in str(aluno.get('Agrupar_Com_Pais', '')).split(',') if n.strip()]
         for p in pedidos:
             if p in aluno_turma:
                 edges.append({
@@ -652,7 +708,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     "color": {"color": "#2ecc71", "highlight": "#27ae60"}, "arrows": "to", "type": "agrupar"
                 })
 
-        vetos = [n.strip().lower() for n in str(aluno.get('Separar_De', '')).split(',') if n.strip()]
+        vetos = [n.strip().lower() for n in str(aluno.get('Separar_De_Pais', '')).split(',') if n.strip()]
         for v in vetos:
             if v in aluno_turma:
                 edges.append({
@@ -660,7 +716,8 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
                     "color": {"color": "#e74c3c", "highlight": "#c0392b"}, "dashes": True, "arrows": "to", "type": "separar"
                 })
 
-    html_content = f"""<html>
+    html_content = f"""
+    <html>
     <head>
         <meta charset="utf-8">
         <title>Painel Interativo de Gestão de Turmas - Constelações</title>
@@ -914,6 +971,7 @@ def gerar_mapa_visual(turmas, df_original, ficheiro_saida_html="mapa_turmas.html
         </script>
     </body>
     </html>"""
+    
     with open(ficheiro_saida_html, "w", encoding="utf-8") as f:
         f.write(html_content)
     print(f"Mapa analítico e interativo gerado com sucesso em '{ficheiro_saida_html}'.")
@@ -932,7 +990,7 @@ if __name__ == "__main__":
         try:
             print(f"\nA processar base de dados: {ficheiro_input}\n")
             dados_alunos = carregar_e_ordenar_alunos(ficheiro_input)
-            resultado_turmas = distribuir_turmas(dados_alunos, max_por_turma=30)
+            resultado_turmas = distribuir_turmas(dados_alunos, max_por_turma=30, limite_excecao=31, max_por_genero=20)
             
             pasta_origem = os.path.dirname(ficheiro_input)
             ficheiro_saida_excel = os.path.join(pasta_origem, "turmas_finais.xlsx")
